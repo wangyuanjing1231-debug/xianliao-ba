@@ -1,7 +1,8 @@
 const fs = require('fs');
+const path = require('path');
 
 // Read the hex table
-const hex = fs.readFileSync('C:/Users/yjw/esp32-bridge/firmware/gbk_table.hex', 'utf8').trim();
+const hex = fs.readFileSync(path.join(__dirname, 'gbk_table.hex'), 'utf8').trim();
 console.log('Hex length:', hex.length, 'chars');
 
 // Parse entries
@@ -98,5 +99,5 @@ for (const [ch, cp, expected] of tests) {
 }
 
 // Write compressed table
-fs.writeFileSync('C:/Users/yjw/esp32-bridge/firmware/gbk_compressed.hex', compressedHex);
+fs.writeFileSync(path.join(__dirname, 'gbk_compressed.hex'), compressedHex);
 console.log('\nCompressed table written to gbk_compressed.hex');
