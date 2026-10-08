@@ -1,0 +1,4 @@
+target: esp32s3 (Pocket-Dongle-S3, N16R8)
+idf: ESP-IDF v6.1
+built_at_utc: 2026-10-08T22:37:22Z
+sha256: 2c4e34044999ebf639cfcee905893d60fce122cdbcd359c1134db2bed38b5134
