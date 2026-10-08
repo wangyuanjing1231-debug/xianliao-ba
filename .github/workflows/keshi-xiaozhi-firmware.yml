@@ -13,7 +13,7 @@ on:
       - ".github/workflows/keshi-xiaozhi-firmware.yml"
 
 permissions:
-  contents: read
+  contents: write   # 编好的固件要存回仓库
 
 jobs:
   build:
@@ -38,3 +38,28 @@ jobs:
           name: keshi-desk-firmware-${{ github.run_number }}
           path: keshi-xiaozhi/firmware/out/
           if-no-files-found: error
+
+      - name: 把编好的固件存进仓库（keshi-xiaozhi/release）
+        shell: bash
+        env:
+          OTA_URL: ${{ github.event.inputs.ota_url || 'http://192.168.1.100:8000/xiaozhi/ota/' }}
+        run: |
+          set -e
+          out=keshi-xiaozhi/firmware/out
+          host=$(echo "$OTA_URL" | sed -E 's#^https?://([^/:]+).*#\1#')
+          ver=$(sed -n 's/^project_version: //p' "$out/BUILD_INFO.txt")
+          name="keshi-desk-1.54_v${ver}_ota-${host}_flash-at-0x0"
+          mkdir -p keshi-xiaozhi/release
+          cp "$out/keshi-desk-1.54-merged.bin" "keshi-xiaozhi/release/${name}.bin"
+          cp "$out/BUILD_INFO.txt" "keshi-xiaozhi/release/${name}.txt"
+          cp "$out/dependencies.lock" keshi-xiaozhi/firmware/dependencies.lock
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add keshi-xiaozhi/release keshi-xiaozhi/firmware/dependencies.lock
+          if git diff --cached --quiet; then echo "没有新内容"; exit 0; fi
+          git commit -m "存入编好的固件 ${name} [skip ci]"
+          for i in 1 2 3; do
+            if git pull --rebase origin "$GITHUB_REF_NAME" && git push origin "HEAD:$GITHUB_REF_NAME"; then exit 0; fi
+            sleep 5
+          done
+          exit 1
