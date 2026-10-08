@@ -1,0 +1,40 @@
+name: 编译科室小智固件
+
+on:
+  workflow_dispatch:
+    inputs:
+      ota_url:
+        description: "科室电脑的服务地址，例如 http://192.168.1.100:8000/xiaozhi/ota/"
+        required: true
+        default: "http://192.168.1.100:8000/xiaozhi/ota/"
+  push:
+    paths:
+      - "keshi-xiaozhi/firmware/**"
+      - ".github/workflows/keshi-xiaozhi-firmware.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    container:
+      image: espressif/idf:v6.1
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: 编译
+        shell: bash
+        env:
+          OTA_URL: ${{ github.event.inputs.ota_url || 'http://192.168.1.100:8000/xiaozhi/ota/' }}
+        run: |
+          git config --global --add safe.directory '*'
+          source "$IDF_PATH/export.sh" > /dev/null
+          bash keshi-xiaozhi/firmware/build.sh
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: keshi-desk-firmware-${{ github.run_number }}
+          path: keshi-xiaozhi/firmware/out/
+          if-no-files-found: error

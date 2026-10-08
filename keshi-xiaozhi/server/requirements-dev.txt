@@ -1,0 +1,3 @@
+# 只在开发、自测时用
+-r requirements.txt
+pytest==9.1.1

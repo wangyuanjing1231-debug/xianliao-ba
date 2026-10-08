@@ -1,0 +1,66 @@
+# 小智服务端配置。复制成 config.yaml 再改；只需要改标了【必改】的几项。
+
+server:
+  host: 0.0.0.0
+  port: 8000                 # 设备连接、OTA、推送接口都用这一个端口
+  public_host: ""            # 一般留空（自动用设备连进来的地址）；地址不对时填 "电脑IP:8000"
+  api_token: "CHANGE_ME_LONG_RANDOM"   # 【必改】OpenClaw 插件调用"让小智开口"接口的口令
+  device_token: ""           # 可选：设备连接口令（会通过 OTA 自动发给设备）
+  allowed_devices: []        # 可选：只允许这些设备（MAC 地址，小写，例如 "aa:bb:cc:dd:ee:ff"）
+  keepalive_seconds: 25      # 待机时每隔多久打个招呼，保持连接不断
+  pending_minutes: 30        # 设备不在线时，通知最多留多久
+  timezone_offset_minutes: 480
+
+openclaw:
+  base_url: http://127.0.0.1:18789/v1
+  token: ""                  # 【必改】OpenClaw 网关 token（openclaw.json 里 gateway.auth.token）
+  model: openclaw/default    # 交给哪个 OpenClaw 智能体；默认智能体就用这个
+  session_prefix: xiaozhi    # 同一台设备的问答进同一个 OpenClaw 会话（有上下文）
+  ack_after_seconds: 6       # 这么多秒还没开口，就先说"收到"，转后台
+  stall_seconds: 10          # 念到一半卡住（在调工具干活）这么多秒，也转后台
+  max_task_minutes: 30       # 后台的活最长等多久
+  max_background_tasks: 3    # 一台设备同时最多几件后台的活
+  max_spoken_chars: 200      # 后台办完后最多念多少字
+  voice_prompt: |
+    你的回复会被科室桌上的一个语音小设备直接念出来，听的人是科室里的医生和同事。
+    用口语回答，先说结论，一般一到三句话、一百字以内；对方明确要求详细时再展开。
+    不要使用任何格式和符号：不要列表、标题、表格、代码块、链接、表情符号、星号、井号。
+    数字和单位照常写，系统会转成读音。
+
+speech:
+  threads: 4                 # 语音模型用几个 CPU 线程（12 代 i5/i7 用 4 就够）
+  asr:
+    model_dir: models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17
+    language: zh
+  vad:
+    model: models/silero_vad.onnx
+    threshold: 0.5
+    min_silence_seconds: 0.8   # 停顿多久算说完
+    min_speech_seconds: 0.25
+    max_utterance_seconds: 30
+    no_speech_timeout: 8       # 按了键但一直没说话，多久后自动回待机
+  tts:
+    type: matcha               # 本机朗读：Matcha 标贝女声（快、中文清楚）
+    model_dir: models/matcha-icefall-zh-baker
+    vocoder: models/vocos-22khz-univ.onnx
+    speed: 1.0                 # 语速，1.1 稍快
+    volume: 1.0
+
+replies:
+  ack: "收到，这个要花点时间，我先去办，办好了叫你。"
+  ack_continue: "我接着去办，办好了叫你。"
+  not_heard: "没听清，再按一下说吧。"
+  empty: "这个我没想好怎么回答。"
+  openclaw_down: "大脑那边没连上，请稍后再试。"
+  error: "出了点问题，请再说一次。"
+  too_busy: "手上的事已经排满了，等前面的办完再说。"
+  done_prefix: "刚才的事办好了。"
+  task_failed: "刚才那件事没办成。"
+  too_long_tail: "后面还有，想听细节再问我。"
+
+# 读法表：左边是文字，右边是念法（英文缩写默认按字母念，比如 CT 念"西提"）
+lexicon:
+  PACS: 派克斯
+  RIS: 瑞斯
+  HIS: 黑斯
+  OpenClaw: 龙虾
