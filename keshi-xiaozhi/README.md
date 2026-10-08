@@ -10,5 +10,6 @@
 | `firmware/` | 固件改动：基于 78/xiaozhi-esp32 固定版本的补丁 + 新板子目录 + 像素小人素材 |
 | `deploy/` | 给科室那台 Windows 电脑上的 AI 照着装的部署说明 |
 | `release/` | 编好的固件（整包，从 0x0 地址烧） |
+| `deploy/PROMPT.md` | 交给那台电脑上 AI 的一段话（复制过去就行） |
 
 版本全部锁定，见 `VERSIONS.md`；做过的选择和理由见 `DECISIONS.md`。
