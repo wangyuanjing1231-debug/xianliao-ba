@@ -1,0 +1,217 @@
+diff --git a/main/CMakeLists.txt b/main/CMakeLists.txt
+index 226a20b..467037e 100644
+--- a/main/CMakeLists.txt
++++ b/main/CMakeLists.txt
+@@ -466,6 +466,11 @@ elseif(CONFIG_BOARD_TYPE_WAVESHARE_ESP32_S3_TOUCH_LCD_1_54)
+     set(BUILTIN_TEXT_FONT font_noto_sans_basic_20_4)
+     set(BUILTIN_ICON_FONT font_material_symbols_20_4)
+     set(DEFAULT_EMOJI_COLLECTION noto-color-emoji_64)
++elseif(CONFIG_BOARD_TYPE_KESHI_DESK_1_54)
++    set(BOARD_DIR "keshi/keshi-desk-1.54")
++    set(BUILTIN_TEXT_FONT font_noto_sans_basic_20_4)
++    set(BUILTIN_ICON_FONT font_material_symbols_20_4)
++    set(DEFAULT_EMOJI_COLLECTION noto-color-emoji_64)
+ elseif(CONFIG_BOARD_TYPE_WAVESHARE_ESP32_S3_LCD_0_85)
+     set(BOARD_DIR "waveshare/esp32-s3-lcd-0.85")
+     set(BUILTIN_TEXT_FONT font_noto_sans_basic_16_4)
+diff --git a/main/Kconfig.projbuild b/main/Kconfig.projbuild
+index afdaf94..82c54ca 100644
+--- a/main/Kconfig.projbuild
++++ b/main/Kconfig.projbuild
+@@ -6,6 +6,15 @@ config OTA_URL
+     help
+         The application will access this URL to check for new firmwares and server address.
+ 
++config KESHI_VOICE_MODE
++    bool "Keshi desk mode: stay connected, one question per press"
++    default y if BOARD_TYPE_KESHI_DESK_1_54
++    default n
++    help
++        Keep the WebSocket connection to the local server open while idle so the server can
++        push voice notifications; return to idle after each answer; pressing the button
++        while listening finishes the sentence instead of cancelling it.
++
+ choice
+     prompt "Flash Assets"
+     default FLASH_DEFAULT_ASSETS if !USE_EMOTE_MESSAGE_STYLE
+@@ -263,6 +272,9 @@ choice BOARD_TYPE
+     config BOARD_TYPE_JIUCHUAN
+         bool "Jiuchuan ESP32-S3 (九川智能)"
+         depends on IDF_TARGET_ESP32S3
++    config BOARD_TYPE_KESHI_DESK_1_54
++        bool "Keshi Desk Voice (Waveshare ESP32-S3-Touch-LCD-1.54)"
++        depends on IDF_TARGET_ESP32S3
+     config BOARD_TYPE_KEVIN_BOX_2
+         bool "Kevin Box 2"
+         depends on IDF_TARGET_ESP32S3
+diff --git a/main/application.cc b/main/application.cc
+index 31de205..f426541 100644
+--- a/main/application.cc
++++ b/main/application.cc
+@@ -16,6 +16,7 @@
+ #include <esp_log.h>
+ #include <arpa/inet.h>
+ #include <cJSON.h>
++#include <algorithm>
+ #include <cstring>
+ #include <limits>
+ 
+@@ -272,6 +273,9 @@ void Application::Run() {
+         }
+ 
+         if (bits & MAIN_EVENT_CLOCK_TICK) {
++#if CONFIG_KESHI_VOICE_MODE
++            MaintainControlChannel();
++#endif
+             clock_ticks_++;
+             auto display = Board::GetInstance().GetDisplay();
+             display->UpdateStatusBar();
+@@ -440,9 +444,16 @@ void Application::CheckAssetsVersion() {
+ }
+ 
+ void Application::CheckNewVersion() {
++#if CONFIG_KESHI_VOICE_MODE
++    // Local server: retry a few times quickly, then fall back to the saved WebSocket address.
++    const int MAX_RETRY = 3;
++    int retry_count = 0;
++    int retry_delay = 5;  // Initial retry delay in seconds
++#else
+     const int MAX_RETRY = 10;
+     int retry_count = 0;
+     int retry_delay = 10;  // Initial retry delay in seconds
++#endif
+ 
+     auto& board = Board::GetInstance();
+     while (true) {
+@@ -539,6 +550,11 @@ void Application::InitializeProtocol() {
+         protocol_ = std::make_unique<MqttProtocol>();
+     } else if (ota_->HasWebsocketConfig()) {
+         protocol_ = std::make_unique<WebsocketProtocol>();
++#if CONFIG_KESHI_VOICE_MODE
++    } else if (!Settings("websocket", false).GetString("url").empty()) {
++        ESP_LOGW(TAG, "OTA unavailable, using the last saved local WebSocket server");
++        protocol_ = std::make_unique<WebsocketProtocol>();
++#endif
+     } else {
+         ESP_LOGW(TAG, "No protocol specified in the OTA config, using MQTT");
+         protocol_ = std::make_unique<MqttProtocol>();
+@@ -547,6 +563,13 @@ void Application::InitializeProtocol() {
+     protocol_->OnConnected([this]() { DismissAlert(); });
+ 
+     protocol_->OnNetworkError([this](const std::string& message) {
++#if CONFIG_KESHI_VOICE_MODE
++        if (quiet_reconnect_) {
++            // Background keep-alive reconnect: retry quietly, no alert sound.
++            ESP_LOGW(TAG, "Keep-alive reconnect failed: %s", message.c_str());
++            return;
++        }
++#endif
+         last_error_message_ = message;
+         xEventGroupSetBits(event_group_, MAIN_EVENT_ERROR);
+     });
+@@ -583,6 +606,11 @@ void Application::InitializeProtocol() {
+             ESP_LOGW(TAG, "Incoming JSON message has no type");
+             return;
+         }
++#if CONFIG_KESHI_VOICE_MODE
++        if (strcmp(type->valuestring, "keepalive") == 0) {
++            return;  // Server keep-alive while idle; nothing to do.
++        }
++#endif
+         if (strcmp(type->valuestring, "notify") == 0) {
+             auto audio_url = cJSON_GetObjectItem(root, "audio_url");
+             if (!cJSON_IsString(audio_url) || audio_url->valuestring[0] == '\0') {
+@@ -629,6 +657,12 @@ void Application::InitializeProtocol() {
+             } else if (strcmp(state->valuestring, "stop") == 0) {
+                 Schedule([this]() {
+                     if (GetDeviceState() == kDeviceStateSpeaking) {
++#if CONFIG_KESHI_VOICE_MODE
++                        // One question per button press: go back to idle after the answer,
++                        // but keep the connection open for server notifications.
++                        SetDeviceState(kDeviceStateIdle);
++                        return;
++#endif
+                         if (listening_mode_ == kListeningModeManualStop) {
+                             SetDeviceState(kDeviceStateIdle);
+                         } else {
+@@ -815,7 +849,13 @@ void Application::HandleToggleChatEvent() {
+     } else if (state == kDeviceStateSpeaking) {
+         AbortSpeaking(kAbortReasonNone);
+     } else if (state == kDeviceStateListening) {
++#if CONFIG_KESHI_VOICE_MODE
++        // Second press while listening means "I'm done talking": let the server answer.
++        protocol_->SendStopListening();
++        SetDeviceState(kDeviceStateIdle);
++#else
+         protocol_->CloseAudioChannel();
++#endif
+     }
+ }
+ 
+@@ -1164,6 +1204,34 @@ void Application::HandleNotificationFinished(uint32_t playback_id, bool success)
+     StopNotification();
+ }
+ 
++#if CONFIG_KESHI_VOICE_MODE
++void Application::MaintainControlChannel() {
++    // Runs in the main task once per second. Keeps the WebSocket open while idle so the
++    // server can push "notify" messages (task finished, announcements from chat apps).
++    if (!protocol_ || GetDeviceState() != kDeviceStateIdle) {
++        return;
++    }
++    if (protocol_->IsAudioChannelOpened()) {
++        reconnect_backoff_s_ = 2;
++        return;
++    }
++    int64_t now = esp_timer_get_time();
++    if (now < next_reconnect_us_) {
++        return;
++    }
++    ESP_LOGI(TAG, "Keep-alive: reconnecting to server");
++    quiet_reconnect_ = true;
++    bool ok = protocol_->OpenAudioChannel();
++    quiet_reconnect_ = false;
++    if (ok) {
++        reconnect_backoff_s_ = 2;
++    } else {
++        reconnect_backoff_s_ = std::min(reconnect_backoff_s_ * 2, 60);
++    }
++    next_reconnect_us_ = esp_timer_get_time() + (int64_t)reconnect_backoff_s_ * 1000000;
++}
++#endif
++
+ void Application::Schedule(std::function<void()>&& callback) {
+     {
+         std::lock_guard<std::mutex> lock(mutex_);
+diff --git a/main/application.h b/main/application.h
+index f2b9a00..a69e9e4 100644
+--- a/main/application.h
++++ b/main/application.h
+@@ -175,6 +175,12 @@ private:
+ 
+     // Activation task (runs in background)
+     void ActivationTask();
++#if CONFIG_KESHI_VOICE_MODE
++    void MaintainControlChannel();
++    int64_t next_reconnect_us_ = 0;
++    int reconnect_backoff_s_ = 2;
++    bool quiet_reconnect_ = false;
++#endif
+ 
+     // Helper methods
+     void CheckAssetsVersion();
+diff --git a/main/protocols/websocket_protocol.cc b/main/protocols/websocket_protocol.cc
+index e0e3df9..58c6f3e 100644
+--- a/main/protocols/websocket_protocol.cc
++++ b/main/protocols/websocket_protocol.cc
+@@ -206,6 +206,10 @@ std::string WebsocketProtocol::GetHelloMessage() {
+     cJSON_AddBoolToObject(features, "aec", true);
+ #endif
+     cJSON_AddBoolToObject(features, "mcp", true);
++#if CONFIG_KESHI_VOICE_MODE
++    // Tell the server this firmware stays connected and returns to idle after each answer.
++    cJSON_AddNumberToObject(features, "keepalive", 1);
++#endif
+     cJSON_AddItemToObject(root, "features", features);
+     AddTextFontCapabilities(root);
+     cJSON_AddStringToObject(root, "transport", "websocket");
