@@ -1,0 +1,7 @@
+upstream: https://github.com/78/xiaozhi-esp32.git @ 0d576d3d4c049c6f55eaf879725dc23e516511b4
+board: keshi/keshi-desk-1.54 (keshi-desk-1.54)
+ota_url: http://192.168.1.100:8000/xiaozhi/ota/
+idf: ESP-IDF v6.1
+project_version: 2.5.1
+built_at_utc: 2026-10-08T09:13:21Z
+sha256: 59846d1f9e065f649879dcf5442c63c9bd8a0bd9b0c86aefeddd9f38236c7b60
