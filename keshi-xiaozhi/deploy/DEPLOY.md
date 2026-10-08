@@ -227,6 +227,8 @@ cd C:\keshi-xiaozhi\server
 
 以后要换 Wi-Fi 或电脑 IP 变了：**连按三下主按键**，设备回到配网模式，重新做一遍 6.2。
 
+（可选）把科室电脑的地址直接编进固件，配网时就不用填 OTA 地址：在 GitHub 打开仓库 → Actions → "编译科室小智固件" → Run workflow，填 `http://<IP>:8000/xiaozhi/ota/`。约 15 分钟后 `keshi-xiaozhi/release/` 里会多出一个文件名带这个 IP 的固件，用它重新烧（6.1）。
+
 ### 6.3 只认这台设备（建议）
 
 ```powershell
