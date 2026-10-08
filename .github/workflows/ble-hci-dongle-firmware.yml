@@ -1,0 +1,53 @@
+name: 编译蓝牙接收器固件
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "ble-hci-dongle/firmware/**"
+      - ".github/workflows/ble-hci-dongle-firmware.yml"
+
+permissions:
+  contents: write   # 编好的固件要存回仓库
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    container:
+      image: espressif/idf:v6.1
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: 编译
+        shell: bash
+        run: |
+          git config --global --add safe.directory '*'
+          source "$IDF_PATH/export.sh" > /dev/null
+          bash ble-hci-dongle/firmware/build.sh
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ble-hci-dongle-firmware-${{ github.run_number }}
+          path: ble-hci-dongle/firmware/out/
+          if-no-files-found: error
+
+      - name: 把编好的固件存进仓库（ble-hci-dongle/release）
+        shell: bash
+        run: |
+          set -e
+          out=ble-hci-dongle/firmware/out
+          name="ble-hci-dongle_esp32s3_flash-at-0x0"
+          mkdir -p ble-hci-dongle/release
+          cp "$out/ble-hci-dongle-merged.bin" "ble-hci-dongle/release/${name}.bin"
+          cp "$out/BUILD_INFO.txt" "ble-hci-dongle/release/${name}.txt"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add ble-hci-dongle/release
+          if git diff --cached --quiet; then echo "没有新内容"; exit 0; fi
+          git commit -m "存入编好的蓝牙接收器固件 ${name} [skip ci]"
+          for i in 1 2 3; do
+            if git pull --rebase origin "$GITHUB_REF_NAME" && git push origin "HEAD:$GITHUB_REF_NAME"; then exit 0; fi
+            sleep 5
+          done
+          exit 1
