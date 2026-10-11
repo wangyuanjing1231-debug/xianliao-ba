@@ -4,5 +4,5 @@ ota_url: http://192.168.1.100:8800/xiaozhi/ota/
 wake_word: wn9_xiaomingtongxue_tts2
 idf: ESP-IDF v6.1
 project_version: 2.5.1
-built_at_utc: 2026-10-11T11:54:06Z
-sha256: 134a685143b81f5b9c5adf1e679c2a992ada8e016f1fbc7d239d3059ad96caed
+built_at_utc: 2026-10-11T12:15:21Z
+sha256: 085dcccf4b681a568a12242abecd4d36cee7c2dc7f28a3e03c8adb72e85f8bc1
