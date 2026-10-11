@@ -1,10 +1,13 @@
-// 科室版小智的屏幕：中间一个像素小人（爸爸），按设备状态和服务端推来的状态换动作。
-// 待机 / 聆听 / 思考 / 说话 / 干活中 / 干完了 / 出错，共 7 种。
+// Muse 版小智的屏幕：中间是 Muse 的小怪兽（muse_pixel.c 实时画，放大 3 倍），按设备状态和服务端推来的状态换模样。
+// 待机 / 聆听 / 思考 / 说话 / 干活中（用思考）/ 干完了（待机 + 开心）/ 出错。
 #pragma once
 
 #include "device_state.h"
 #include "display/lcd_display.h"
-#include "pet_frames.h"
+
+extern "C" {
+#include "muse_pixel.h"
+}
 
 #include <esp_timer.h>
 
@@ -21,10 +24,12 @@ public:
     void OnDeviceState(DeviceState state);
 
 private:
-    lv_obj_t* pet_ = nullptr;
+    lv_obj_t* canvas_ = nullptr;
+    uint16_t* buf_ = nullptr;
     lv_timer_t* timer_ = nullptr;
-    const pet_pose_t* pose_ = nullptr;
-    uint8_t frame_ = 0;
+    muse_mode_t mode_ = MUSE_MODE_BOOT;
+    float happy_ = 0.0f;
+    int64_t mode_since_us_ = 0;
 
     DeviceState state_ = kDeviceStateStarting;
     bool thinking_ = false;
@@ -35,7 +40,6 @@ private:
     int64_t sad_until_us_ = 0;
 
     void ApplyLocked();
-    void ShowPoseLocked(const pet_pose_t* pose);
-    void ShowFrameLocked();
+    void DrawLocked();
     static void TimerCb(lv_timer_t* timer);
 };

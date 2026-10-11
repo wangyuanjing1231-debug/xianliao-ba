@@ -1,6 +1,6 @@
 // 科室桌面版小智：硬件是微雪 ESP32-S3-Touch-LCD-1.54（不带电池版），从微雪官方板子代码改来。
 // 和原版的区别：
-//  - 屏幕换成像素小人（PetDisplay），对话文字不上屏，只显示系统提示；
+//  - 屏幕换成 Muse 小怪兽（PetDisplay），对话文字不上屏，只显示系统提示；
 //  - 不初始化触摸（只用实体按键），不做电池电量和省电关机（插 USB 常电）；
 //  - 主按键：按一下 = 开始说话 / 说完了 / 打断；双击 = 开关屏幕背光；三击 = 重新配网；
 //  - 音量键不变。
@@ -15,6 +15,7 @@
 #include "backlight.h"
 #include "assets/lang_config.h"
 #include "pet_display.h"
+#include "settings.h"
 
 #include <algorithm>
 #include <string>
@@ -28,7 +29,7 @@
 
 #define TAG "keshi_desk_1_54"
 
-// 借用"指示灯"接口拿到设备状态变化，用来驱动像素小人（不改核心代码）
+// 借用"指示灯"接口拿到设备状态变化，用来驱动小怪兽（不改核心代码）
 class PetStateLed : public Led {
 public:
     explicit PetStateLed(PetDisplay* display) : display_(display) {}
@@ -166,12 +167,21 @@ private:
                            });
     }
 
+    // 新刷的板子默认音量 100（上游默认 70）；按过音量键以后记住你调的音量
+    void DefaultVolumeMax() {
+        Settings settings("audio", true);
+        if (settings.GetInt("output_volume", -1) < 0) {
+            settings.SetInt("output_volume", 100);
+        }
+    }
+
 public:
     KeshiDeskBoard()
         : main_button_(PWR_BUTTON_GPIO),
           volume_up_button_(VOLUME_UP_BUTTON_GPIO),
           volume_down_button_(VOLUME_DOWN_BUTTON_GPIO) {
         KeepPowerOn();
+        DefaultVolumeMax();
         InitializeI2c();
         InitializeSpi();
         InitializeLcdDisplay();

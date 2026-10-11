@@ -42,9 +42,11 @@
 
 #define DISPLAY_WIDTH 240
 #define DISPLAY_HEIGHT 240
-#define DISPLAY_MIRROR_X false
+// 竖着放、充电口朝右时画面是正的：整屏转 90 度（交换横竖 + 左右镜像）。
+// 如果刷进去发现画面倒着，把 MIRROR_X 改 false、MIRROR_Y 改 true，并把 OFFSET_X 改成 80。
+#define DISPLAY_MIRROR_X true
 #define DISPLAY_MIRROR_Y false
-#define DISPLAY_SWAP_XY false
+#define DISPLAY_SWAP_XY true
 #define DISPLAY_RGB_ORDER LCD_RGB_ELEMENT_ORDER_RGB
 #define DISPLAY_INVERT_COLOR true
 
