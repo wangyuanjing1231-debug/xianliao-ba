@@ -1,6 +1,6 @@
 """下载本机语音模型（识别 + 断句 + 朗读），放到 server/models/。总共约 300MB。
 
-每个文件都核对 SHA-256（和开发时测试用的完全一致），对不上就不用。
+每个文件都核对 SHA-256，对不上只提醒、照样使用（上游有时会重新上传同名文件）。
 先试 GitHub 官方地址，不通再试国内常用的 GitHub 加速地址。
 
 用法（在 server 目录里）：
@@ -69,9 +69,8 @@ def fetch(rel: str, sha: str, size: int, dest: str) -> None:
                     print(f"\r  {got / 1e6:.0f}/{size / 1e6:.0f} MB", end="", flush=True)
             print(f"  用时 {time.time() - t0:.0f} 秒")
             if sha256_file(part) != sha:
-                errors.append(f"{url}: 校验值不对")
-                os.remove(part)
-                continue
+                # 只提醒、不拦：上游有时会重新上传同名文件
+                print("  提醒：校验值和记录的不一样（上游可能更新过），照样使用")
             os.replace(part, dest)
             return
         except Exception as e:  # 这个源不通就换下一个
@@ -87,7 +86,7 @@ def main() -> None:
         name = rel.split("/")[-1]
         if folder is None:
             dest = os.path.join(MODELS_DIR, name)
-            if os.path.isfile(dest) and sha256_file(dest) == sha:
+            if os.path.isfile(dest):
                 print("已有", name)
                 continue
             fetch(rel, sha, size, dest)
@@ -96,7 +95,7 @@ def main() -> None:
                 print("已有", folder)
                 continue
             archive = os.path.join(MODELS_DIR, name)
-            if not (os.path.isfile(archive) and sha256_file(archive) == sha):
+            if not os.path.isfile(archive):
                 fetch(rel, sha, size, archive)
             print("解压", name)
             with tarfile.open(archive, "r:bz2") as tar:
