@@ -1,0 +1,71 @@
+name: 编译 Muse 版小智固件
+
+on:
+  workflow_dispatch:
+    inputs:
+      ota_url:
+        description: "家里 Ubuntu 的服务地址，例如 http://192.168.1.100:8800/xiaozhi/ota/（配网时也能改）"
+        required: true
+        default: "http://192.168.1.100:8800/xiaozhi/ota/"
+      wake_word:
+        description: "唤醒词模型名；小明同学 = wn9_xiaomingtongxue_tts2；不要唤醒词填 disabled"
+        required: true
+        default: "wn9_xiaomingtongxue_tts2"
+  push:
+    paths:
+      - "muse-xiaozhi/firmware/**"
+      - ".github/workflows/muse-xiaozhi-firmware.yml"
+
+permissions:
+  contents: write   # 编好的固件要存回仓库
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    container:
+      image: espressif/idf:v6.1
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: 编译
+        shell: bash
+        env:
+          OTA_URL: ${{ github.event.inputs.ota_url || 'http://192.168.1.100:8800/xiaozhi/ota/' }}
+          WAKE_WORD: ${{ github.event.inputs.wake_word || 'wn9_xiaomingtongxue_tts2' }}
+        run: |
+          git config --global --add safe.directory '*'
+          source "$IDF_PATH/export.sh" > /dev/null
+          bash muse-xiaozhi/firmware/build.sh
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: muse-xiaozhi-firmware-${{ github.run_number }}
+          path: muse-xiaozhi/firmware/out/
+          if-no-files-found: error
+
+      - name: 把编好的固件存进仓库（muse-xiaozhi/release）
+        shell: bash
+        env:
+          OTA_URL: ${{ github.event.inputs.ota_url || 'http://192.168.1.100:8800/xiaozhi/ota/' }}
+        run: |
+          set -e
+          out=muse-xiaozhi/firmware/out
+          host=$(echo "$OTA_URL" | sed -E 's#^https?://([^/:]+).*#\1#')
+          ver=$(sed -n 's/^project_version: //p' "$out/BUILD_INFO.txt")
+          ww=$(sed -n 's/^wake_word: //p' "$out/BUILD_INFO.txt")
+          name="muse-xiaozhi-1.54_v${ver}_${ww}_ota-${host}_flash-at-0x0"
+          mkdir -p muse-xiaozhi/release
+          cp "$out/keshi-desk-1.54-merged.bin" "muse-xiaozhi/release/${name}.bin"
+          cp "$out/BUILD_INFO.txt" "muse-xiaozhi/release/${name}.txt"
+          cp "$out/dependencies.lock" muse-xiaozhi/firmware/dependencies.lock
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add muse-xiaozhi/release muse-xiaozhi/firmware/dependencies.lock
+          if git diff --cached --quiet; then echo "没有新内容"; exit 0; fi
+          git commit -m "存入编好的固件 ${name} [skip ci]"
+          for i in 1 2 3; do
+            if git pull --rebase origin "$GITHUB_REF_NAME" && git push origin "HEAD:$GITHUB_REF_NAME"; then exit 0; fi
+            sleep 5
+          done
+          exit 1

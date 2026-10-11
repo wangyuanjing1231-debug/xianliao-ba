@@ -1,0 +1,16 @@
+[Unit]
+Description=Muse 版小智服务端（板子 <-> Muse）
+After=network-online.target musegadget.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=yc
+WorkingDirectory=/home/yc/xianliao-ba/muse-xiaozhi/server
+ExecStart=/home/yc/xianliao-ba/muse-xiaozhi/server/.venv/bin/python main.py
+Restart=always
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

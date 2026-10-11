@@ -1,0 +1,68 @@
+# 小智服务端配置。复制成 config.yaml 再改；只需要改标了【必改】的几项。
+
+server:
+  host: 0.0.0.0
+  port: 8800                 # 设备连接、OTA、推送接口都用这一个端口
+  public_host: ""            # 一般留空（自动用设备连进来的地址并补上端口）；地址不对时填 "UbuntuIP:8800"
+  api_token: "CHANGE_ME_LONG_RANDOM"   # 【必改】tools/say.py 调用"让小智开口"接口的口令
+  device_token: ""           # 可选：设备连接口令（会通过 OTA 自动发给设备）
+  allowed_devices: []        # 可选：只允许这些设备（MAC 地址，小写，例如 "aa:bb:cc:dd:ee:ff"）
+  keepalive_seconds: 25      # 待机时每隔多久打个招呼，保持连接不断
+  pending_minutes: 30        # 设备不在线时，通知最多留多久
+  timezone_offset_minutes: 480
+
+muse:
+  command: musegadget        # Muse Gadget 的命令行（/usr/local/bin/musegadget）
+  session_id: ""             # 【必改】Muse 副聊天的编号，必须是 UUID 格式；留空会进主聊天
+  inbox_dir: ~/muse-xiaozhi/inbox   # Muse 把"要念的话"写到这里，必须和 prompt_template 里的路径一致（自动替换）
+  reply_timeout_seconds: 180 # 等 Muse 写回来最多多少秒
+  ack_after_seconds: 12      # 这么多秒还没回话，就先说"收到"，转后台，回来了再主动念
+  stall_seconds: 10
+  max_task_minutes: 10       # 后台的活最长等多久
+  max_background_tasks: 3    # 一台设备同时最多几件后台的活
+  max_spoken_chars: 200      # 最多念多少字
+  prompt_template: |
+    [小智语音#{id}] 下面是我对着桌上的小智语音设备说的话，经语音识别转成文字，可能有错别字或同音字，请按我的身份和上下文理解：
+    {text}
+
+    请照常回答（手机 App 里看的是你的完整回答）。回答完以后，必须调用这台设备的 file.write，把念给我听的版本写入：
+    {path}
+    念的版本要求：口语、先说重点、一到三句、一百字以内；不要任何格式符号、链接、表情；文件里只写要念出来的话，不写别的。
+
+speech:
+  threads: 4                 # 语音模型用几个 CPU 线程（12 代 i5/i7 用 4 就够）
+  asr:
+    model_dir: models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17
+    language: zh
+  vad:
+    model: models/silero_vad.onnx
+    threshold: 0.5
+    min_silence_seconds: 0.8   # 停顿多久算说完
+    min_speech_seconds: 0.25
+    max_utterance_seconds: 30
+    no_speech_timeout: 8       # 按了键但一直没说话，多久后自动回待机
+  tts:
+    type: matcha               # 本机朗读：Matcha 标贝女声（快、中文清楚）
+    model_dir: models/matcha-icefall-zh-baker
+    vocoder: models/vocos-22khz-univ.onnx
+    speed: 1.0                 # 语速，1.1 稍快
+    volume: 1.0
+
+replies:
+  ack: "收到，我问问 Muse，回话了叫你。"
+  ack_continue: "我接着等 Muse，回话了叫你。"
+  not_heard: "没听清，再说一次吧。"
+  empty: "这个我没想好怎么回答。"
+  muse_down: "Muse 那边没连上，请稍后再试。"
+  error: "出了点问题，请再说一次。"
+  too_busy: "手上的事已经排满了，等前面的办完再说。"
+  done_prefix: "Muse 回话了。"
+  task_failed: "刚才那句没问成。"
+  too_long_tail: "后面还有，想听细节再问我。"
+
+# 读法表：左边是文字，右边是念法（英文缩写默认按字母念，比如 CT 念"西提"）
+lexicon:
+  PACS: 派克斯
+  RIS: 瑞斯
+  HIS: 黑斯
+  Muse: 缪斯

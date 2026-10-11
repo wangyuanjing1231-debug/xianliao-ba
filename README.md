@@ -5,6 +5,7 @@
 | 项目 | 做什么 | 说明文档（出问题先看这个） | 编好的固件 |
 | --- | --- | --- | --- |
 | 打字机（ESP32 Bridge） | 手机连板子的热点，在网页上输入文字，板子假装成 USB 键盘替你打字 | 暂无单独文档；固件开头的注释写了用法，原理见 `学习大纲.md` | `release/esp32-bridge-flash-at-0x0.bin` |
+| Muse 版小智（muse-xiaozhi） | 桌上的小智板子说"小明同学"或按键提问，家里 Ubuntu 把话交给 Muse，回答念出来，手机 App 里也能看到 | `muse-xiaozhi/部署.md` | `muse-xiaozhi/release/`（GitHub 自动编译后放进来） |
 | 蓝牙接收器（ble-hci-dongle） | 让 Ubuntu 电脑通过这块板子用上低功耗蓝牙 | `ble-hci-dongle/Windows刷机.md`（怎么刷）<br>`ble-hci-dongle/Ubuntu接入.md`（刷完怎么用） | `ble-hci-dongle/release/` |
 
 ## 文件夹
@@ -15,6 +16,7 @@
 | `release/` | 打字机编好的固件、热点二维码 |
 | `tools/` | 打字机网页和中文编码表的生成脚本 |
 | `ble-hci-dongle/` | 蓝牙接收器：源码、编好的固件、两份说明 |
+| `muse-xiaozhi/` | Muse 版小智：服务端、固件改动、部署说明 |
 | `.github/workflows/` | GitHub 上自动编译固件的设置 |
 | `学习大纲.md` | 板子原理的学习目录 |
 
@@ -26,4 +28,4 @@
 
 ## 已删除
 
-- 科室小智（keshi-xiaozhi）：2026-10-11 删除，改为先刷官方固件学习。旧内容在 Git 历史里，提交 `0e5573b` 之前都还在。
+- 科室小智（keshi-xiaozhi，接 OpenClaw）：2026-10-11 删除，同一天改造成 Muse 版小智（muse-xiaozhi）。旧内容在 Git 历史提交 `0e5573b` 之前。

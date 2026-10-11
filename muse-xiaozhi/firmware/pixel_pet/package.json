@@ -1,0 +1,8 @@
+{
+  "name": "keshi-pixel-pet",
+  "private": true,
+  "type": "module",
+  "description": "Render the pixel pet frames from the family character sheet",
+  "scripts": { "frames": "node gen_frames.mjs" },
+  "dependencies": { "@napi-rs/canvas": "0.1.100" }
+}
