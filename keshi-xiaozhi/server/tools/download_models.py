@@ -32,7 +32,7 @@ MODELS = [
      "7d1efa2138a65b0b488df37f8b89e3d91a60676e416f515b952358d83dfd347e", 163002883,
      "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17"),
     ("tts-models/matcha-icefall-zh-baker.tar.bz2",
-     "20de2ec034b55562609d6362771c934905dfe11d0f41ec103d593427ad9a7efb", 75463442,
+     "fc41b5115c45ffab7f46e1a5a0fcefd15b2698e32ca5d080dde7a5e7caa2fe56", 75480421,
      "matcha-icefall-zh-baker"),
     ("vocoder-models/vocos-22khz-univ.onnx",
      "0574a135aa1db2de6e181050db2ec528496cacd4a4701fc5d7faf9f9804c0081", 53884024, None),
