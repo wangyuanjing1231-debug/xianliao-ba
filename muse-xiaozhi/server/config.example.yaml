@@ -50,9 +50,11 @@ speech:
     volume: 1.0
 
 replies:
-  ack: "收到，我先去办，办好了叫你。"
+  ack_echo: "收到，{heard}。"   # 一说完就复述原话；{heard} 是识别出的话
+  echo_max_chars: 25           # 超过这么多字只念开头（到第一个停顿处）
+  ack: "收到，我先去办，办好了叫你。"   # 旧说法，ack_echo 留空时才用
   ack_continue: "我接着去办，办好了叫你。"
-  not_heard: "没听清，再说一次吧。"
+  not_heard: "刚才没听到你说话。"   # 没录到话（误唤醒、按了键没开口、只有"嗯"）
   empty: "这个我没想好怎么回答。"
   muse_down: "Muse 那边没连上，请稍后再试。"
   error: "出了点问题，请再说一次。"

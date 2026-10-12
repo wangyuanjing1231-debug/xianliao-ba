@@ -219,3 +219,15 @@ class SentenceAssembler:
         s, self.buf = self.buf, ""
         s = s.strip().lstrip(_HARD_STOP + _SOFT_STOP)
         return [s] if s.strip(_HARD_STOP + _SOFT_STOP + " ") else []
+
+
+def echo_head(text: str, max_chars: int = 25, cut_chars: int = 20) -> str:
+    """复述用：短句全念；长句念到第一个停顿处，最多 cut_chars 个字。"""
+    t = re.sub(r"\s+", " ", text or "").strip().rstrip(_HARD_STOP + _SOFT_STOP + "，。 ")
+    if len(t) <= max_chars:
+        return t
+    head = t[:cut_chars]
+    m = re.search(r"[" + re.escape(_HARD_STOP + _SOFT_STOP) + r"]", head)
+    if m and m.start() >= 4:
+        head = head[:m.start()]
+    return head.rstrip(_HARD_STOP + _SOFT_STOP + " ")

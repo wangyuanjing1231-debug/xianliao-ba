@@ -43,3 +43,12 @@ def test_streaming_sentences():
     assert "代码就不念了。" in got
     assert got[-1] == "收尾一句话。"
     assert not any("x=1" in s for s in got)
+
+
+def test_echo_head_short_and_long():
+    from xzserver.textclean import echo_head
+    assert echo_head("帮我查一下明天谁值班。") == "帮我查一下明天谁值班"
+    long = "帮我把下周三的门诊，改到周四下午，然后通知一下护士站和住院总"
+    assert echo_head(long) == "帮我把下周三的门诊"
+    no_stop = "帮我把下周三下午的门诊全部改到周四下午然后通知护士站"
+    assert echo_head(no_stop) == no_stop[:20]

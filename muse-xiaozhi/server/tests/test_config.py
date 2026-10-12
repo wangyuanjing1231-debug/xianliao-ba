@@ -18,3 +18,8 @@ def test_user_config_overrides_defaults(tmp_path):
 def test_example_config_paths_exist_in_repo_layout():
     cfg = main.load_config(os.devnull)
     assert cfg["speech"]["asr"]["model_dir"].startswith("models/")
+
+
+def test_ack_echo_formats():
+    cfg = main.load_config(os.devnull)
+    assert cfg["replies"]["ack_echo"].format(heard="明天谁值班") == "收到，明天谁值班。"

@@ -13,7 +13,7 @@ import numpy as np
 from aiohttp import WSMsgType, web
 
 from .audio import DEVICE_IN_RATE, DownlinkEncoder, FRAME_MS, UplinkDecoder
-from .textclean import SentenceAssembler
+from .textclean import SentenceAssembler, echo_head
 
 log = logging.getLogger("session")
 
@@ -357,8 +357,12 @@ class DeviceSession:
                 await self.hub.to_background(job, offset)
                 sp = sp or Speaker(self)
                 self.speaker = sp
-                await sp.say(r["ack"] if not sp.started else r["ack_continue"],
-                             self.hub.cleaner.clean(r["ack"] if not sp.started else r["ack_continue"]))
+                if sp.started:
+                    ack = r["ack_continue"]
+                else:  # 复述原话，听得出它有没有听对
+                    tpl = r.get("ack_echo") or r["ack"]
+                    ack = tpl.format(heard=echo_head(job.text, int(r.get("echo_max_chars", 25))))
+                await sp.say(ack, self.hub.cleaner.clean(ack))
                 await sp.finish()
                 self.speaker = None
                 return
