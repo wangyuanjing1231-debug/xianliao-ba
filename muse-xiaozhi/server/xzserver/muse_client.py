@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import asyncio
+import datetime
 import logging
 import os
 import time
@@ -27,6 +28,9 @@ class MuseClient:
         self.cfg = cfg
         self.command = cfg.get("command") or "musegadget"
         self.session_id = (cfg.get("session_id") or "").strip()
+        # daily：每天自动换一个新的副聊天（同一天的问答在一起，隔天清零，不会越聊越偏）
+        # fixed：一直用 session_id 这一个副聊天
+        self.session_mode = (cfg.get("session_mode") or "daily").strip()
         self.inbox = os.path.expanduser(cfg.get("inbox_dir") or "~/muse-xiaozhi/inbox")
         self.timeout = float(cfg.get("reply_timeout_seconds", 180))
         self.template = cfg.get("prompt_template") or "{text}\n\n回答后请用 file.write 把要念的话写入 {path}"
@@ -43,10 +47,18 @@ class MuseClient:
             except OSError:
                 pass
 
+    def current_session_id(self, today: datetime.date | None = None) -> str:
+        """今天该用的副聊天编号。daily 模式下由 session_id 和日期算出来，同一天总是同一个。"""
+        if not self.session_id or self.session_mode != "daily":
+            return self.session_id
+        day = (today or datetime.date.today()).isoformat()
+        return str(uuid.uuid5(uuid.UUID(self.session_id), day))
+
     async def _send(self, message: str):
         args = [self.command, "send-user-msg"]
-        if self.session_id:
-            args += ["--session-id", self.session_id]
+        sid = self.current_session_id()
+        if sid:
+            args += ["--session-id", sid]
         args.append(message)
         try:
             proc = await asyncio.create_subprocess_exec(

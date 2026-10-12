@@ -12,6 +12,7 @@ def test_user_config_overrides_defaults(tmp_path):
     assert cfg["muse"]["session_id"] == "s1"
     assert cfg["muse"]["command"] == "musegadget"
     assert "{path}" in cfg["muse"]["prompt_template"]
+    assert cfg["muse"]["session_mode"] == "daily"
 
 
 def test_example_config_paths_exist_in_repo_layout():

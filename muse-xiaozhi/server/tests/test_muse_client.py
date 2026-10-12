@@ -1,6 +1,8 @@
 """用一个假的 musegadget 测去程、回程：假命令收到消息后，按消息里写的路径把回复写进收件箱。"""
 
 import asyncio
+import datetime
+import uuid
 import os
 import stat
 import sys
@@ -36,6 +38,7 @@ async def collect(client, text):
 def test_round_trip(tmp_path):
     cmd, log = make_fake(tmp_path, "前列腺 PI-RADS 4 分，建议穿刺。")
     client = MuseClient({"command": cmd, "session_id": "11111111-2222-3333-4444-555555555555",
+                         "session_mode": "fixed",
                          "inbox_dir": str(tmp_path / "inbox"), "reply_timeout_seconds": 5,
                          "prompt_template": "#{id} {text} -> {path}"})
     out = asyncio.run(collect(client, "PI-RADS 四分怎么办"))
@@ -59,3 +62,19 @@ def test_missing_command(tmp_path):
     client = MuseClient({"command": str(tmp_path / "nope"), "inbox_dir": str(tmp_path / "inbox")})
     with pytest.raises(MuseError, match="连不上"):
         asyncio.run(collect(client, "你好"))
+
+
+def test_daily_session_changes_each_day(tmp_path):
+    base = "11111111-2222-3333-4444-555555555555"
+    client = MuseClient({"session_id": base, "inbox_dir": str(tmp_path / "inbox")})  # 默认 daily
+    d1 = client.current_session_id(datetime.date(2026, 10, 12))
+    assert d1 == client.current_session_id(datetime.date(2026, 10, 12))   # 同一天同一个
+    assert d1 != client.current_session_id(datetime.date(2026, 10, 13))   # 隔天换新的
+    assert d1 != base
+    assert str(uuid.UUID(d1)) == d1                                        # 还是标准 UUID 格式
+
+
+def test_fixed_session_keeps_id(tmp_path):
+    base = "11111111-2222-3333-4444-555555555555"
+    client = MuseClient({"session_id": base, "session_mode": "fixed", "inbox_dir": str(tmp_path / "inbox")})
+    assert client.current_session_id(datetime.date(2026, 10, 13)) == base
