@@ -13,8 +13,12 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OUT="${OUT:-$HERE/out}"
 NAME="ble-hci-dongle"
 
-cd "$HERE"
-rm -rf build sdkconfig
+# ESP-IDF 不支持路径里有中文，先把源码复制到纯英文的临时目录再编译
+WORK="${TMPDIR:-/tmp}/ble-hci-dongle-src"
+rm -rf "$WORK"
+mkdir -p "$WORK"
+cp -r "$HERE/CMakeLists.txt" "$HERE/sdkconfig.defaults" "$HERE/main" "$WORK/"
+cd "$WORK"
 idf.py set-target esp32s3
 idf.py build
 idf.py merge-bin
