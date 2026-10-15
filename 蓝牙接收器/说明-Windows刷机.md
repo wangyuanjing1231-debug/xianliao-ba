@@ -3,8 +3,8 @@
 ## 刷之前你自己要做的两件事
 
 1. 从 GitHub 仓库下载这两个文件，放进 Windows 的"下载"文件夹：
-   - `ble-hci-dongle/release/ble-hci-dongle_esp32s3_flash-at-0x0.bin`（新固件）
-   - `release/esp32-bridge-flash-at-0x0.bin`（原来的固件，以后刷回用）
+   - `蓝牙接收器/成品/蓝牙接收器-v1.bin`（新固件）
+   - `打字桥/成品/打字桥-v1.bin`（原来的固件，以后刷回用）
 2. **按住板子上的 BOOT 键不放，把板子插进电脑，插好后再松手。** 这样板子会进入"烧录模式"（只接收新固件、不运行任何程序的状态）。
 
 然后把下面的提示词整段复制给 Windows 上的 AI。
@@ -21,7 +21,7 @@
 3. 运行 Get-PnpDevice -Class Ports -PresentOnly | Format-Table FriendlyName, InstanceId -AutoSize。找出 InstanceId 里含有 VID_303A 的那一行，它的 FriendlyName 括号里的 COM 编号就是板子（例如 COM5）。如果没有含 VID_303A 的行，停下告诉我。下面把这个编号记作 <端口>。
 4. 运行 py -m esptool --chip esp32s3 -p <端口> flash-id，确认输出里有 Detected flash size: 16MB。
 5. 运行 py -m esptool --chip esp32s3 -p <端口> read-flash 0 0x1000000 "$env:USERPROFILE\Downloads\pocket-dongle-backup.bin"，然后运行 Get-Item "$env:USERPROFILE\Downloads\pocket-dongle-backup.bin" | Select-Object Length，确认大小是 16777216。
-6. 运行 py -m esptool --chip esp32s3 -p <端口> write-flash 0x0 "$env:USERPROFILE\Downloads\ble-hci-dongle_esp32s3_flash-at-0x0.bin"，确认输出最后有 Hash of data verified。
+6. 运行 py -m esptool --chip esp32s3 -p <端口> write-flash 0x0 "$env:USERPROFILE\Downloads\蓝牙接收器-v1.bin"，确认输出最后有 Hash of data verified。
 7. 告诉我已经完成，并提醒我把板子拔下来。
 ```
 
@@ -51,7 +51,7 @@
 请在这台 Windows 电脑的 PowerShell 里依次完成下面的事，每一步都把原始输出贴给我。同一步失败两次就停下，告诉我卡在哪一步、原始报错是什么、你认为原因是什么，等我回复再继续。
 
 1. 运行 Get-PnpDevice -Class Ports -PresentOnly | Format-Table FriendlyName, InstanceId -AutoSize，找出 InstanceId 含 VID_303A 那一行的 COM 编号，记作 <端口>。没有就停下告诉我。
-2. 检查 "$env:USERPROFILE\Downloads\pocket-dongle-backup.bin" 是否存在且大小是 16777216。如果是，运行 py -m esptool --chip esp32s3 -p <端口> write-flash 0x0 "$env:USERPROFILE\Downloads\pocket-dongle-backup.bin"。如果不是，改为运行 py -m esptool --chip esp32s3 -p <端口> write-flash 0x0 "$env:USERPROFILE\Downloads\esp32-bridge-flash-at-0x0.bin"，并告诉我用的是仓库里的原固件而不是备份。
+2. 检查 "$env:USERPROFILE\Downloads\pocket-dongle-backup.bin" 是否存在且大小是 16777216。如果是，运行 py -m esptool --chip esp32s3 -p <端口> write-flash 0x0 "$env:USERPROFILE\Downloads\pocket-dongle-backup.bin"。如果不是，改为运行 py -m esptool --chip esp32s3 -p <端口> write-flash 0x0 "$env:USERPROFILE\Downloads\打字桥-v1.bin"，并告诉我用的是仓库里的原固件而不是备份。
 3. 确认输出最后有 Hash of data verified，告诉我已经完成，并提醒我把板子拔下来再插上。
 ```
 

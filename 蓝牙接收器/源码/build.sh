@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 编译低功耗蓝牙 USB 接收器固件（ESP32-S3 N16R8，Pocket-Dongle-S3）。
-# 一般由 GitHub Actions 自动编译（.github/workflows/ble-hci-dongle-firmware.yml）。
-# 本机编译：装好 ESP-IDF v6.1 并执行 export.sh 后，bash ble-hci-dongle/firmware/build.sh
+# 一般由 GitHub Actions 自动编译（.github/workflows/蓝牙接收器编译.yml）。
+# 本机编译：装好 ESP-IDF v6.1 并执行 export.sh 后，bash 蓝牙接收器/源码/build.sh
 #
 # 产物在 firmware/out/：
 #   ble-hci-dongle-merged.bin  整包固件，从 0x0 地址整片烧录
