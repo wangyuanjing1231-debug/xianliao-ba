@@ -10,13 +10,12 @@
 #include "buddy_cat.h"
 #include "web_portal.h"
 
-// Hardware Pinout for Pocket-Dongle-S3 (LilyGo T-Dongle-S3 Plus)
-#define LCD_DC       2
-#define LCD_CS       4
-#define LCD_SCK      5
-#define LCD_MOSI     3
-#define LCD_RST      1
-#define LCD_BL       38
+// Hardware Pinout for Pocket-Dongle-S3
+#define LCD_MOSI     11
+#define LCD_SCLK     10
+#define LCD_CS       12
+#define LCD_DC       13
+#define LCD_RST      14
 #define BOOT_BUTTON  0
 
 #define SCREEN_W     160
@@ -30,7 +29,7 @@ WebServer apServer(80);
 DNSServer dnsServer;
 WiFiUDP udp;
 
-Arduino_DataBus *bus = new Arduino_ESP32SPI(LCD_DC, LCD_CS, LCD_SCK, LCD_MOSI, GFX_NOT_DEFINED);
+Arduino_DataBus *bus = new Arduino_ESP32SPI(LCD_DC, LCD_CS, LCD_SCLK, LCD_MOSI, GFX_NOT_DEFINED);
 Arduino_GFX *tft = new Arduino_ST7735(bus, LCD_RST, 1 /* rotation */, true /* IPS */,
                                       80 /* w */, 160 /* h */,
                                       26 /* col_offset1 */, 1 /* row_offset1 */,
@@ -64,7 +63,7 @@ bool isConnected = false;
 const char* OFFICE_SSID = "chuanliu";
 const char* OFFICE_PASS = "chuanliu123";
 
-const char* HOME_SSID   = "前置";
+const char* HOME_SSID   = "qianzhi";
 const char* HOME_PASS   = "qianzhi8888";
 
 void drawFrame(PetState state, const char* stateLabel, uint16_t stateColor,
@@ -369,10 +368,6 @@ void setup() {
   // Initialize APA102 LED
   petLed.begin();
   petLed.setColor(0, 40, 0, 5);
-
-  // Turn ON LCD Backlight (Active LOW on GPIO 38)
-  pinMode(LCD_BL, OUTPUT);
-  digitalWrite(LCD_BL, LOW);
 
   // Initialize Screen
   if (!tft->begin()) {
