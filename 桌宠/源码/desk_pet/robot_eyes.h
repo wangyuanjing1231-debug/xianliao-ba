@@ -58,8 +58,8 @@ public:
     }
   }
 
-  // 2. 干活 (BUSY): 黄色，上沿压低专注，轻微抖动，右上角大号数字第几步
-  void drawBusy(Arduino_Canvas *gfx, uint32_t tick, int step) {
+  // 2. 干活 (BUSY): 黄色，上沿压低专注，轻微抖动，右上角大号数字显示「已完成/总数」
+  void drawBusy(Arduino_Canvas *gfx, uint32_t tick, const String& progress) {
     // 高频轻微抖动
     int jx = (tick & 1) ? 1 : -1;
     int jy = ((tick >> 1) & 1) ? 1 : 0;
@@ -88,14 +88,16 @@ public:
     // 右眼：向内侧下压 (左上倾斜切掉三角)
     gfx->fillTriangle(rx - 2, y - 2, rx + w + 2, y - 2, rx - 2, y + 18, EYE_COLOR_BLACK);
 
-    // 右上角大号数字显示第几步 (屏幕唯一文字)
-    if (step > 0) {
-      gfx->setTextSize(2);
+    // 右上角大号文字显示「已完成/总数」如 3/5 (屏幕唯一文字，若无清单则不显示)
+    if (progress.length() > 0 && progress != "null") {
+      int size = (progress.length() <= 4) ? 2 : 1;
+      gfx->setTextSize(size);
       gfx->setTextColor(EYE_COLOR_WHITE);
-      String stepStr = String(step);
-      int textX = 160 - (stepStr.length() * 12) - 3;
-      gfx->setCursor(textX, 2);
-      gfx->print(stepStr);
+      int charW = size * 6;
+      int textW = progress.length() * charW;
+      int textX = 160 - textW - 3;
+      gfx->setCursor(textX, 3);
+      gfx->print(progress);
     }
   }
 

@@ -52,6 +52,7 @@ uint32_t lastPollTime = 0;
 uint32_t lastDiscoveryTime = 0;
 
 int currentStep = 0;
+String currentProgress = "";
 String currentTool = "Ready";
 String currentSummary = "Waiting task";
 String xperiaIP = "";
@@ -66,7 +67,7 @@ const char* OFFICE_PASS = "chuanliu123";
 const char* HOME_SSID   = "qianzhi";
 const char* HOME_PASS   = "qianzhi8888";
 
-void drawEyesFrame(PetState state, int step = 0) {
+void drawEyesFrame(PetState state, const String& progress = "") {
   canvas->fillScreen(0x0000); // Black background
 
   switch (state) {
@@ -77,7 +78,7 @@ void drawEyesFrame(PetState state, int step = 0) {
       robotEyes.drawIdle(canvas, animTick);
       break;
     case STATE_BUSY:
-      robotEyes.drawBusy(canvas, animTick, step);
+      robotEyes.drawBusy(canvas, animTick, progress);
       break;
     case STATE_DONE:
       robotEyes.drawCelebrate(canvas, animTick);
@@ -113,7 +114,7 @@ void runBootDemo() {
   uint32_t start = millis();
   while (millis() - start < 3000) {
     animTick++;
-    drawEyesFrame(STATE_SLEEP, 0);
+    drawEyesFrame(STATE_SLEEP, "");
     delay(50);
   }
 
@@ -122,7 +123,7 @@ void runBootDemo() {
   start = millis();
   while (millis() - start < 3000) {
     animTick++;
-    drawEyesFrame(STATE_IDLE, 0);
+    drawEyesFrame(STATE_IDLE, "");
     delay(50);
   }
 
@@ -131,7 +132,7 @@ void runBootDemo() {
   start = millis();
   while (millis() - start < 3000) {
     animTick++;
-    drawEyesFrame(STATE_BUSY, 2);
+    drawEyesFrame(STATE_BUSY, "3/5");
     delay(50);
   }
 
@@ -140,7 +141,7 @@ void runBootDemo() {
   start = millis();
   while (millis() - start < 3000) {
     animTick++;
-    drawEyesFrame(STATE_DONE, 0);
+    drawEyesFrame(STATE_DONE, "");
     delay(50);
   }
 }
@@ -300,6 +301,12 @@ void pollXperia() {
     if (deserializeJson(doc, payload) == DeserializationError::Ok) {
       lastContactTime = millis();
       String st = doc["state"].as<String>();
+      if (doc.containsKey("progress")) {
+        currentProgress = doc["progress"].as<String>();
+        if (currentProgress == "null") currentProgress = "";
+      } else {
+        currentProgress = "";
+      }
       currentStep = doc["step"] | 0;
       currentTool = doc["tool"].as<String>();
       currentSummary = doc["summary"].as<String>();
@@ -312,11 +319,11 @@ void pollXperia() {
         currentState = STATE_IDLE;
       }
       static String lastStateStr = "";
-      static int lastStepNum = -1;
-      if (st != lastStateStr || currentStep != lastStepNum) {
+      static String lastProgStr = "";
+      if (st != lastStateStr || currentProgress != lastProgStr) {
         lastStateStr = st;
-        lastStepNum = currentStep;
-        Serial.printf("State update: %s (step %d, tool: %s)\n", st.c_str(), currentStep, currentTool.c_str());
+        lastProgStr = currentProgress;
+        Serial.printf("State update: %s (progress: %s, tool: %s)\n", st.c_str(), currentProgress.c_str(), currentTool.c_str());
       }
     }
   } else {
@@ -402,10 +409,14 @@ void loop() {
       prefs.putString("xperia_ip", xperiaIP);
       prefs.end();
       Serial.printf("OK: Xperia IP set to %s\n", xperiaIP.c_str());
+    } else if (cmd.startsWith("SET_PROGRESS ")) {
+      currentProgress = cmd.substring(13);
+      currentProgress.trim();
+      Serial.printf("OK: Progress set to %s\n", currentProgress.c_str());
     } else if (cmd == "INFO") {
-      Serial.printf("INFO: WiFi=%s, IP=%s, XperiaIP=%s, State=%d, Step=%d\n",
+      Serial.printf("INFO: WiFi=%s, IP=%s, XperiaIP=%s, State=%d, Progress=%s\n",
                     WiFi.SSID().c_str(), WiFi.localIP().toString().c_str(),
-                    xperiaIP.c_str(), currentState, currentStep);
+                    xperiaIP.c_str(), currentState, currentProgress.c_str());
     } else if (cmd == "DEMO") {
       Serial.println("OK: Running boot demo");
       runBootDemo();
@@ -435,7 +446,7 @@ void loop() {
   setLedForState(currentState);
   animTick++;
 
-  drawEyesFrame(currentState, currentStep);
+  drawEyesFrame(currentState, currentProgress);
 
   delay(50);
 }
