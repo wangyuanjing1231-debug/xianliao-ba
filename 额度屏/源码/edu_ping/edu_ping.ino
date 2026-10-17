@@ -71,9 +71,10 @@ int   gemini_5h_reset_secs = 0;
 int   gemini_5h_reset_mins = 0;
 String gemini_resets_at = "";
 
-// 2. Antigravity Weekly
-float gemini_weekly_remaining = 100.0f;
-int   gemini_weekly_reset_hrs = 0;
+// 2. Antigravity Weekly (API 未提供真实每周额度，依规置无效显示 --)
+float gemini_weekly_remaining = -1.0f;
+int   gemini_weekly_reset_hrs = -1;
+bool  gemini_weekly_valid = false;
 
 // 3. Gemini Web
 float gemini_web_5h_remaining = 100.0f;
@@ -310,6 +311,8 @@ void render_display() {
     cur_pct = gemini_weekly_remaining;
     if (offline) {
       reset_str = "Offline / Waiting";
+    } else if (!gemini_weekly_valid || gemini_weekly_remaining < 0) {
+      reset_str = "Resets: --";
     } else {
       int days = gemini_weekly_reset_hrs / 24;
       int hrs = gemini_weekly_reset_hrs % 24;
@@ -329,6 +332,8 @@ void render_display() {
   // 决定主题色
   uint16_t theme_color = COLOR_GREEN;
   if (offline) {
+    theme_color = COLOR_GRAY_BAR;
+  } else if (current_page == 1 && (!gemini_weekly_valid || gemini_weekly_remaining < 0)) {
     theme_color = COLOR_GRAY_BAR;
   } else if (cur_pct > 50.0f) {
     theme_color = COLOR_GREEN;
@@ -365,6 +370,9 @@ void render_display() {
   if (offline) {
     gfx->setCursor(45, 66);
     gfx->print("--- %");
+  } else if (current_page == 1 && (!gemini_weekly_valid || gemini_weekly_remaining < 0)) {
+    gfx->setCursor(60, 66);
+    gfx->print("-- %");
   } else {
     int pct_int = (int)round(cur_pct);
     String num_str = String(pct_int) + "%";
@@ -379,9 +387,12 @@ void render_display() {
   gfx->drawRoundRect(bar_x + 1, bar_y + 1, bar_w - 2, bar_h - 2, 3, theme_color);
 
   int fill_max = bar_w - 8;
-  int fill_w = offline ? 0 : (int)((cur_pct / 100.0f) * fill_max);
-  if (fill_w > fill_max) fill_w = fill_max;
-  if (fill_w < 0) fill_w = 0;
+  int fill_w = 0;
+  if (!offline && !(current_page == 1 && (!gemini_weekly_valid || gemini_weekly_remaining < 0))) {
+    fill_w = (int)((cur_pct / 100.0f) * fill_max);
+    if (fill_w > fill_max) fill_w = fill_max;
+    if (fill_w < 0) fill_w = 0;
+  }
 
   if (fill_w > 0) {
     gfx->fillRoundRect(bar_x + 4, bar_y + 4, fill_w, bar_h - 8, 2, theme_color);
@@ -458,9 +469,16 @@ void poll_yjw_quota() {
       gemini_5h_reset_mins = doc["gemini_5h_reset_minutes"] | 0;
       String reset_at     = doc["gemini_5h_resets_at"] | "";
       
-      // 2. Antigravity Weekly
-      gemini_weekly_remaining = doc["gemini_weekly_remaining_pct"] | 100.0f;
-      gemini_weekly_reset_hrs = doc["gemini_weekly_reset_hours"] | 0;
+      // 2. Antigravity Weekly (API 未提供真实每周额度，若为 null/缺失则置无效显示 --)
+      if (doc.containsKey("gemini_weekly_remaining_pct") && !doc["gemini_weekly_remaining_pct"].isNull()) {
+        gemini_weekly_remaining = doc["gemini_weekly_remaining_pct"].as<float>();
+        gemini_weekly_reset_hrs = doc["gemini_weekly_reset_hours"].as<int>();
+        gemini_weekly_valid     = true;
+      } else {
+        gemini_weekly_remaining = -1.0f;
+        gemini_weekly_reset_hrs = -1;
+        gemini_weekly_valid     = false;
+      }
       
       // 3. Gemini Web
       gemini_web_5h_remaining = doc["gemini_web_5h_remaining_pct"] | 100.0f;
@@ -537,11 +555,15 @@ String get_ascii_screen_page(int page_idx) {
   txt += format_ascii_centered("");
   
   String pct_str = String((int)round(p_pct)) + "%";
+  int bars = (int)(p_pct / 100.0f * 25.0f);
+  if (page_idx == 1 && (!gemini_weekly_valid || gemini_weekly_remaining < 0)) {
+    pct_str = "-- %";
+    bars = 0;
+  }
   txt += format_ascii_centered(pct_str);
   txt += format_ascii_centered("REMAINING");
   txt += format_ascii_centered("");
   
-  int bars = (int)(p_pct / 100.0f * 25.0f);
   if (bars > 25) bars = 25;
   if (bars < 0) bars = 0;
   String bar_str = "[";
@@ -556,9 +578,13 @@ String get_ascii_screen_page(int page_idx) {
     txt += format_ascii_centered("Resets in " + String(hrs) + "h " + String(mins) + "m");
     txt += format_ascii_centered("");
   } else if (page_idx == 1) {
-    int days = gemini_weekly_reset_hrs / 24;
-    int hrs = gemini_weekly_reset_hrs % 24;
-    txt += format_ascii_centered("Resets in " + String(days) + "d " + String(hrs) + "h");
+    if (!gemini_weekly_valid || gemini_weekly_remaining < 0) {
+      txt += format_ascii_centered("Resets: --");
+    } else {
+      int days = gemini_weekly_reset_hrs / 24;
+      int hrs = gemini_weekly_reset_hrs % 24;
+      txt += format_ascii_centered("Resets in " + String(days) + "d " + String(hrs) + "h");
+    }
     txt += format_ascii_centered("");
   } else {
     txt += format_ascii_centered("5H Reset: " + gemini_web_5h_reset_str);
@@ -569,6 +595,8 @@ String get_ascii_screen_page(int page_idx) {
     txt += format_ascii_centered(">>> [ALARM] CLAP OR PRESS BTN <<<");
   } else if (is_screen_gray) {
     txt += format_ascii_centered(">>> [OFFLINE] WAITING DATA <<<");
+  } else if (page_idx == 1 && (!gemini_weekly_valid || gemini_weekly_remaining < 0)) {
+    txt += format_ascii_centered("Status: Gray (No Data)");
   } else {
     String c = (p_pct > 50) ? "Green (>50%)" : ((p_pct >= 20) ? "Yellow (20-50%)" : "Red (<20%)");
     txt += format_ascii_centered("Status: " + c);
@@ -619,8 +647,13 @@ void setup_web_server() {
     doc["page_name"] = (current_page == 0) ? "5H" : ((current_page == 1) ? "WEEKLY" : "GEMINI WEB");
     doc["gemini_5h_remaining_pct"] = gemini_5h_remaining;
     doc["gemini_5h_reset_minutes"] = gemini_5h_reset_mins;
-    doc["gemini_weekly_remaining_pct"] = gemini_weekly_remaining;
-    doc["gemini_weekly_reset_hours"] = gemini_weekly_reset_hrs;
+    if (gemini_weekly_valid && gemini_weekly_remaining >= 0) {
+      doc["gemini_weekly_remaining_pct"] = gemini_weekly_remaining;
+      doc["gemini_weekly_reset_hours"] = gemini_weekly_reset_hrs;
+    } else {
+      doc["gemini_weekly_remaining_pct"] = (char*)NULL;
+      doc["gemini_weekly_reset_hours"] = (char*)NULL;
+    }
     doc["gemini_web_5h_remaining_pct"] = gemini_web_5h_remaining;
     doc["gemini_web_5h_reset_str"] = gemini_web_5h_reset_str;
     doc["gemini_web_weekly_remaining_pct"] = gemini_web_weekly_remaining;
