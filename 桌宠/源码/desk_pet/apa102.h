@@ -28,11 +28,11 @@ public:
     // Start frame: 32 zero bits
     for (int i = 0; i < 4; i++) sendByte(0x00);
 
-    // LED frame: 111[5-bit brightness] [B] [G] [R]
+    // LED frame: 111[5-bit brightness] [R] [G] [B]
     sendByte(0xE0 | (brightness & 0x1F));
-    sendByte(b);
-    sendByte(g);
     sendByte(r);
+    sendByte(g);
+    sendByte(b);
 
     // End frame: 32 one bits
     for (int i = 0; i < 4; i++) sendByte(0xFF);

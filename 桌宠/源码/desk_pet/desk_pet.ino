@@ -7,7 +7,7 @@
 #include <Arduino_GFX_Library.h>
 
 #include "apa102.h"
-#include "buddy_cat.h"
+#include "robot_eyes.h"
 #include "web_portal.h"
 
 // Hardware Pinout for Pocket-Dongle-S3
@@ -23,7 +23,7 @@
 
 // Global instances
 Apa102Led petLed;
-BuddyCat catBuddy;
+RobotEyes robotEyes;
 Preferences prefs;
 WebServer apServer(80);
 DNSServer dnsServer;
@@ -34,7 +34,7 @@ Arduino_GFX *tft = new Arduino_ST7735(bus, LCD_RST, 1 /* rotation */, true /* IP
                                       80 /* w */, 160 /* h */,
                                       26 /* col_offset1 */, 1 /* row_offset1 */,
                                       26 /* col_offset2 */, 1 /* row_offset2 */,
-                                      false /* bgr */);
+                                      true /* bgr = true to fix color channels */);
 Arduino_Canvas *canvas = new Arduino_Canvas(SCREEN_W, SCREEN_H, tft);
 
 // States
@@ -66,54 +66,23 @@ const char* OFFICE_PASS = "chuanliu123";
 const char* HOME_SSID   = "qianzhi";
 const char* HOME_PASS   = "qianzhi8888";
 
-void drawFrame(PetState state, const char* stateLabel, uint16_t stateColor,
-               const String& line2, const String& line3, const String& line4) {
+void drawEyesFrame(PetState state, int step = 0) {
   canvas->fillScreen(0x0000); // Black background
 
-  // 1. Draw Pet on Left
   switch (state) {
     case STATE_SLEEP:
-      catBuddy.drawSleep(canvas, animTick);
+      robotEyes.drawSleep(canvas, animTick);
       break;
     case STATE_IDLE:
-      catBuddy.drawIdle(canvas, animTick);
+      robotEyes.drawIdle(canvas, animTick);
       break;
     case STATE_BUSY:
-      catBuddy.drawBusy(canvas, animTick);
+      robotEyes.drawBusy(canvas, animTick, step);
       break;
     case STATE_DONE:
-      catBuddy.drawCelebrate(canvas, animTick);
+      robotEyes.drawCelebrate(canvas, animTick);
       break;
   }
-
-  // 2. Vertical separator
-  canvas->drawFastVLine(74, 8, 64, 0x3186);
-
-  // 3. Right side info
-  // Line 1: State Badge
-  canvas->setTextSize(1);
-  canvas->setTextColor(stateColor);
-  canvas->setCursor(80, 10);
-  canvas->print(stateLabel);
-
-  // Line 2: Step
-  canvas->setTextColor(0xFFFF);
-  canvas->setCursor(80, 28);
-  canvas->print(line2);
-
-  // Line 3: Tool / Summary
-  canvas->setTextColor(0xDEE6);
-  canvas->setCursor(80, 46);
-  String l3 = line3;
-  if (l3.length() > 11) l3 = l3.substring(0, 10) + "..";
-  canvas->print(l3);
-
-  // Line 4: Status / Network
-  canvas->setTextColor(0x7BEF);
-  canvas->setCursor(80, 64);
-  String l4 = line4;
-  if (l4.length() > 11) l4 = l4.substring(0, 10) + "..";
-  canvas->print(l4);
 
   canvas->flush();
 }
@@ -121,16 +90,16 @@ void drawFrame(PetState state, const char* stateLabel, uint16_t stateColor,
 void setLedForState(PetState s) {
   switch (s) {
     case STATE_SLEEP:
-      petLed.setColor(0, 15, 80, 5); // Dim Blue
+      petLed.setColor(0, 15, 70, 5); // Dim Blue
       break;
     case STATE_IDLE:
-      petLed.setColor(0, 80, 0, 10); // Soft Green
+      petLed.setColor(0, 180, 0, 12); // Green
       break;
     case STATE_BUSY:
-      petLed.setColor(160, 80, 0, 15); // Amber/Yellow
+      petLed.setColor(200, 140, 0, 15); // Yellow
       break;
     case STATE_DONE:
-      petLed.setColor(140, 0, 140, 20); // Magenta/Purple
+      petLed.setColor(180, 0, 180, 15); // Purple
       break;
   }
 }
@@ -144,8 +113,8 @@ void runBootDemo() {
   uint32_t start = millis();
   while (millis() - start < 3000) {
     animTick++;
-    drawFrame(STATE_SLEEP, "[SLEEP]", 0x07FF, "Step: -", "Offline", "Zzz...");
-    delay(80);
+    drawEyesFrame(STATE_SLEEP, 0);
+    delay(50);
   }
 
   // State 2: IDLE (3 seconds)
@@ -153,8 +122,8 @@ void runBootDemo() {
   start = millis();
   while (millis() - start < 3000) {
     animTick++;
-    drawFrame(STATE_IDLE, "[IDLE]", 0x07E0, "Step: -", "Ready", "Waiting");
-    delay(80);
+    drawEyesFrame(STATE_IDLE, 0);
+    delay(50);
   }
 
   // State 3: BUSY (3 seconds)
@@ -162,8 +131,8 @@ void runBootDemo() {
   start = millis();
   while (millis() - start < 3000) {
     animTick++;
-    drawFrame(STATE_BUSY, "[BUSY]", 0xFFE0, "Step: 2", "run_cmd", "Thinking..");
-    delay(80);
+    drawEyesFrame(STATE_BUSY, 2);
+    delay(50);
   }
 
   // State 4: DONE (3 seconds)
@@ -171,8 +140,8 @@ void runBootDemo() {
   start = millis();
   while (millis() - start < 3000) {
     animTick++;
-    drawFrame(STATE_DONE, "[DONE]", 0xF81F, "Finished!", "All done", "Yay!");
-    delay(80);
+    drawEyesFrame(STATE_DONE, 0);
+    delay(50);
   }
 }
 
@@ -466,32 +435,7 @@ void loop() {
   setLedForState(currentState);
   animTick++;
 
-  String stepStr = (currentStep > 0) ? ("Step: " + String(currentStep)) : "Step: -";
-  String label = "";
-  uint16_t color = 0xFFFF;
+  drawEyesFrame(currentState, currentStep);
 
-  switch (currentState) {
-    case STATE_SLEEP:
-      label = "[SLEEP]";
-      color = 0x07FF;
-      drawFrame(STATE_SLEEP, label.c_str(), color, stepStr, "Offline", "Zzz...");
-      break;
-    case STATE_IDLE:
-      label = "[IDLE]";
-      color = 0x07E0;
-      drawFrame(STATE_IDLE, label.c_str(), color, stepStr, currentTool, "Ready");
-      break;
-    case STATE_BUSY:
-      label = "[BUSY]";
-      color = 0xFFE0;
-      drawFrame(STATE_BUSY, label.c_str(), color, stepStr, currentTool, currentSummary);
-      break;
-    case STATE_DONE:
-      label = "[DONE]";
-      color = 0xF81F;
-      drawFrame(STATE_DONE, label.c_str(), color, stepStr, "Complete!", "Yay!");
-      break;
-  }
-
-  delay(80);
+  delay(50);
 }
