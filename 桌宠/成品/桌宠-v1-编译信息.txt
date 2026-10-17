@@ -1,0 +1,5 @@
+target: esp32s3 (Pocket-Dongle-S3, N16R8)
+framework: arduino (arduino-esp32 2.0.14)
+built_at_utc: 2026-10-17T06:05:40Z
+sha256: 807d38d02327ae5d90cfdfd77cd8df6df08f11c5ecfb86f351f64c6795260253
+flash_offset: 0x10000
