@@ -31,14 +31,17 @@
 #define PA_CTRL   7
 
 // 实体按键 (低电平有效)
-#define BTN_BOOT  0
-#define BTN_1     5
-#define BTN_2     4
+// GPIO 5: 主按键 (PWR / Center)
+// GPIO 4: 左侧音量键 (PLUS / Vol+)
+// GPIO 0: 右侧音量键 (BOOT / Vol-)
+#define BTN_MAIN    5
+#define BTN_VOL_UP  4
+#define BTN_VOL_DN  0
 
 // Wi-Fi 与 YJW 服务配置
-const char* WIFI_SSID     = "qianzhi";
-const char* WIFI_PASS     = "qianzhi8888";
-const char* QUOTA_API_URL = "http://192.168.6.170:8888/api/quota";
+const char* WIFI_SSID       = "qianzhi";
+const char* WIFI_PASS       = "qianzhi8888";
+const char* QUOTA_API_URL   = "http://192.168.6.170:8888/api/quota";
 const char* CLEAR_ALARM_URL = "http://192.168.6.170:8888/api/clear-alarm";
 
 // ==================== 全局驱动与状态 ====================
@@ -52,15 +55,36 @@ es7210_dev_handle_t es7210_handle = NULL;
 bool es8311_ready = false;
 bool es7210_ready = false;
 
+// 页面状态
+// 0: 5H (Antigravity 5小时额度)
+// 1: WEEKLY (Antigravity 每周额度)
+// 2: GEMINI WEB (Gemini 网页版额度)
+int current_page = 0;
+unsigned long last_page_switch_ms = 0;
+const unsigned long AUTO_RETURN_HOME_MS = 30000; // 30秒无人操作自动回第1页
+
 // 数据状态
+// 1. Antigravity 5H
 float gemini_5h_remaining = 100.0f;
 float gemini_5h_used = 0.0f;
 int   gemini_5h_reset_secs = 0;
 int   gemini_5h_reset_mins = 0;
+String gemini_resets_at = "";
+
+// 2. Antigravity Weekly
 float gemini_weekly_remaining = 100.0f;
+int   gemini_weekly_reset_hrs = 0;
+
+// 3. Gemini Web
+float gemini_web_5h_remaining = 100.0f;
+float gemini_web_5h_used = 0.0f;
+String gemini_web_5h_reset_str = "--:--";
+float gemini_web_weekly_remaining = 100.0f;
+float gemini_web_weekly_used = 0.0f;
+String gemini_web_weekly_reset_str = "---";
+
 int   server_hour = 12;
 bool  test_alarm_flag = false;
-String gemini_resets_at = "";
 
 unsigned long last_data_received_ms = 0;
 unsigned long last_poll_ms = 0;
@@ -73,7 +97,7 @@ bool alarm_reported_for_current_window = false;
 String last_window_id = "";
 unsigned long alarm_start_ms = 0;
 const unsigned long MAX_ALARM_DURATION_MS = 60000; // 最长响 1 分钟自停
-int clap_threshold = 12000;                        // 拍手幅值触发阈值 (背景~40，拍手>15000)
+int clap_threshold = 12000;                        // 拍手幅值触发阈值
 
 // 颜色定义 (RGB565)
 #define COLOR_BG_NORMAL     0x0000  // 纯黑底色
@@ -83,10 +107,13 @@ int clap_threshold = 12000;                        // 拍手幅值触发阈值 (
 #define COLOR_RED           0xF800  // 快用完红 (< 20%)
 #define COLOR_GRAY_BAR      0x7BEF  // 离线指示灰
 #define COLOR_TEXT_WHITE    0xFFFF  // 白色正文
-#define COLOR_TEXT_MUTED    0x8410  // 暗灰提示文字
+#define COLOR_TEXT_MUTED    0x8410  // 暗灰辅助
 
-uint16_t current_theme_color = COLOR_GREEN;
 bool is_screen_gray = false;
+
+// 前置声明
+void render_display();
+void stop_alarm();
 
 // ==================== 音频编解码初始化 ====================
 void init_codecs() {
@@ -108,7 +135,7 @@ void init_codecs() {
       es8311_sample_frequency_config(es8311_handle, 16000 * 256, 16000);
       es8311_voice_volume_set(es8311_handle, 85, NULL);
       es8311_ready = true;
-      Serial.println("[AUDIO] ES8311 喇叭初始化成功");
+      Serial.println("[AUDIO] ES8311 speaker initialized");
     }
   }
 
@@ -126,14 +153,14 @@ void init_codecs() {
     if (es7210_config_codec(es7210_handle, &codec_conf) == ESP_OK) {
       es7210_config_volume(es7210_handle, 50);
       es7210_ready = true;
-      Serial.println("[AUDIO] ES7210 麦克风初始化成功");
+      Serial.println("[AUDIO] ES7210 microphone initialized");
     }
   }
 
   // 初始化 I2S 总线
   i2s.setPins(I2S_BCLK, I2S_WS, I2S_DOUT, I2S_DIN, I2S_MCLK);
   i2s.begin(I2S_MODE_STD, 16000, I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO);
-  Serial.println("[AUDIO] I2S 双工总线已启动 (16kHz 16bit)");
+  Serial.println("[AUDIO] I2S bus started (16kHz 16bit)");
 }
 
 // 播放短促提示音 (约 180ms，1000Hz 蜂鸣)
@@ -143,24 +170,22 @@ void play_short_beep() {
   const int sample_rate = 16000;
   const int duration_ms = 180;
   const int total_samples = (sample_rate * duration_ms) / 1000;
-  int16_t stereo_buf[64 * 2]; // 64 frames (left + right)
+  int16_t stereo_buf[64 * 2];
 
   int frames_sent = 0;
   int phase = 0;
   while (frames_sent < total_samples) {
     int chunk = min(64, total_samples - frames_sent);
     for (int i = 0; i < chunk; i++) {
-      // 1000Hz sine wave (16 samples per period at 16kHz)
       float s = sinf(2.0f * 3.14159265f * (float)phase / 16.0f);
       int16_t val = (int16_t)(s * 14000.0f);
-      stereo_buf[i * 2]     = val; // L
-      stereo_buf[i * 2 + 1] = val; // R
+      stereo_buf[i * 2]     = val;
+      stereo_buf[i * 2 + 1] = val;
       phase = (phase + 1) % 16;
     }
     i2s.write((uint8_t*)stereo_buf, chunk * 4);
     frames_sent += chunk;
   }
-  // 鸣叫完毕立即关闭功放，防止残余底噪
   digitalWrite(PA_CTRL, LOW);
 }
 
@@ -168,9 +193,7 @@ String last_stop_reason = "none";
 int last_detected_peak = 0;
 
 // 监听麦克风 2 秒（检查拍手或按键）
-// 返回 true 表示检测到拍手或按键被按下（立即停止报警）
 bool listen_clap_for_2s() {
-  // 鸣叫后等待 250ms 消除回响，并彻底清空 DMA 接收缓存
   delay(250);
   int16_t flush_buf[128 * 2];
   for (int f = 0; f < 8; f++) {
@@ -181,28 +204,27 @@ bool listen_clap_for_2s() {
   int16_t rx_buf[128 * 2];
 
   while (millis() - start < 2000) {
-    webServer.handleClient(); // 保持 Web 响应
+    webServer.handleClient();
 
-    // 检查实体按键
-    if (digitalRead(BTN_BOOT) == LOW || digitalRead(BTN_1) == LOW || digitalRead(BTN_2) == LOW) {
+    // 检查实体按键：报警时任何按键都能关报警
+    if (digitalRead(BTN_MAIN) == LOW || digitalRead(BTN_VOL_UP) == LOW || digitalRead(BTN_VOL_DN) == LOW) {
       last_stop_reason = "button_pressed";
-      Serial.println("[ALARM] 检测到按键按下，停止报警");
+      Serial.println("[ALARM] Button pressed, stopping alarm");
       return true;
     }
 
-    // 读取麦克风数据
     size_t bytes_read = i2s.readBytes((char*)rx_buf, sizeof(rx_buf));
     if (bytes_read > 0) {
       int frames = bytes_read / 4;
       int16_t max_peak = 0;
       for (int i = 0; i < frames; i++) {
-        int16_t sample = abs(rx_buf[i * 2]); // 左声道
+        int16_t sample = abs(rx_buf[i * 2]);
         if (sample > max_peak) max_peak = sample;
       }
       if (max_peak > clap_threshold) {
         last_detected_peak = max_peak;
         last_stop_reason = "clap_detected (peak=" + String(max_peak) + ")";
-        Serial.printf("[ALARM] 检测到拍手声音! 峰值=%d (阈值=%d)，停止报警\n", max_peak, clap_threshold);
+        Serial.printf("[ALARM] Clap detected! Peak=%d, stopping alarm\n", max_peak);
         return true;
       }
     }
@@ -215,26 +237,22 @@ bool listen_clap_for_2s() {
 void handle_alarm_cycle() {
   if (!alarm_active) return;
 
-  // 检查是否超过 1 分钟自停
   if (millis() - alarm_start_ms > MAX_ALARM_DURATION_MS) {
-    Serial.println("[ALARM] 报警已持续 1 分钟无人接管，自动停响");
+    Serial.println("[ALARM] Alarm duration reached 1 minute, auto-stopping");
     stop_alarm();
     return;
   }
 
-  // 检查时间段静音规则：0点到10点不出声，只变颜色
-  // 如果是 test_alarm 则允许发声（供人工回家测试）
+  // 0点到10点夜间静音只变颜色
   bool mute_sound = (server_hour >= 0 && server_hour < 10 && !test_alarm_flag);
 
   if (!mute_sound) {
-    Serial.println("[ALARM] 鸣叫一声 (180ms)...");
+    Serial.println("[ALARM] Beeping (180ms)...");
     play_short_beep();
   } else {
-    Serial.println("[ALARM] 处于夜间/早晨静音时段 (0点-10点)，不发声只闪屏");
+    Serial.println("[ALARM] Muted period (00:00-10:00), visual only");
   }
 
-  // 停 2 秒并监听拍手与按键
-  Serial.println("[ALARM] 停响 2 秒，麦克风监听拍手/按键中...");
   if (listen_clap_for_2s()) {
     stop_alarm();
   }
@@ -245,7 +263,7 @@ void trigger_alarm() {
     alarm_active = true;
     alarm_start_ms = millis();
     Serial.println("=========================================");
-    Serial.println(">>> 触发额度预警/测试报警! 循环短响 + 拍手监听 <<<");
+    Serial.println(">>> ALARM TRIGGERED: Beep + Clap listening <<<");
     Serial.println("=========================================");
     render_display();
   }
@@ -254,8 +272,7 @@ void trigger_alarm() {
 void stop_alarm() {
   if (alarm_active) {
     alarm_active = false;
-    Serial.println("[ALARM] 报警已停响，恢复常态。");
-    // 通知 YJW 服务清除测试报警标记
+    Serial.println("[ALARM] Alarm cleared.");
     if (WiFi.status() == WL_CONNECTED) {
       HTTPClient http;
       http.begin(CLEAR_ALARM_URL);
@@ -267,138 +284,156 @@ void stop_alarm() {
   }
 }
 
-// ==================== 屏幕渲染 (Clawdmeter 风格) ====================
+// ==================== 屏幕渲染 (全英文三页极简风格) ====================
+// 规则：全英文，每页只放：标题、大数字、进度条、一行重置时间
 void render_display() {
   bool offline = (millis() - last_data_received_ms > OFFLINE_TIMEOUT_MS);
   is_screen_gray = offline;
 
-  // 决定主题色
-  if (offline) {
-    current_theme_color = COLOR_GRAY_BAR;
-  } else if (gemini_5h_remaining > 50.0f) {
-    current_theme_color = COLOR_GREEN;
-  } else if (gemini_5h_remaining >= 20.0f) {
-    current_theme_color = COLOR_YELLOW;
+  float cur_pct = 100.0f;
+  String title_str = "5H";
+  String reset_str = "";
+  String sub_str = "";
+
+  if (current_page == 0) {
+    title_str = "5H";
+    cur_pct = gemini_5h_remaining;
+    if (offline) {
+      reset_str = "Offline / Waiting";
+    } else {
+      int hrs = gemini_5h_reset_secs / 3600;
+      int mins = (gemini_5h_reset_secs % 3600) / 60;
+      reset_str = "Resets in " + String(hrs) + "h " + String(mins) + "m";
+    }
+  } else if (current_page == 1) {
+    title_str = "WEEKLY";
+    cur_pct = gemini_weekly_remaining;
+    if (offline) {
+      reset_str = "Offline / Waiting";
+    } else {
+      int days = gemini_weekly_reset_hrs / 24;
+      int hrs = gemini_weekly_reset_hrs % 24;
+      reset_str = "Resets in " + String(days) + "d " + String(hrs) + "h";
+    }
   } else {
-    current_theme_color = COLOR_RED;
+    title_str = "GEMINI WEB";
+    cur_pct = gemini_web_5h_remaining;
+    if (offline) {
+      reset_str = "Offline / Waiting";
+    } else {
+      reset_str = "Resets at " + gemini_web_5h_reset_str;
+      sub_str   = "Weekly: " + String((int)round(gemini_web_weekly_remaining)) + "%";
+    }
+  }
+
+  // 决定主题色
+  uint16_t theme_color = COLOR_GREEN;
+  if (offline) {
+    theme_color = COLOR_GRAY_BAR;
+  } else if (cur_pct > 50.0f) {
+    theme_color = COLOR_GREEN;
+  } else if (cur_pct >= 20.0f) {
+    theme_color = COLOR_YELLOW;
+  } else {
+    theme_color = COLOR_RED;
   }
 
   uint16_t bg_color = offline ? COLOR_BG_GRAY : COLOR_BG_NORMAL;
   gfx->fillScreen(bg_color);
 
-  // 1. 顶部 Header
-  gfx->setTextSize(2);
-  gfx->setTextColor(COLOR_TEXT_WHITE);
-  gfx->setCursor(16, 12);
-  gfx->print("GEMINI 5H");
-
-  gfx->setTextSize(1);
-  gfx->setCursor(160, 16);
-  if (WiFi.status() == WL_CONNECTED) {
-    gfx->setTextColor(COLOR_GREEN);
-    gfx->print("WiFi OK");
+  // 1. 顶部标题 (全英文，居中)
+  if (current_page == 2) {
+    gfx->setTextSize(2); // GEMINI WEB (10 chars * 12 = 120px)
+    gfx->setTextColor(COLOR_TEXT_WHITE);
+    gfx->setCursor(60, 24);
+    gfx->print(title_str);
+  } else if (current_page == 1) {
+    gfx->setTextSize(3); // WEEKLY (6 chars * 18 = 108px)
+    gfx->setTextColor(COLOR_TEXT_WHITE);
+    gfx->setCursor(66, 20);
+    gfx->print(title_str);
   } else {
-    gfx->setTextColor(COLOR_RED);
-    gfx->print("WiFi LOST");
+    gfx->setTextSize(3); // 5H (2 chars * 18 = 36px)
+    gfx->setTextColor(COLOR_TEXT_WHITE);
+    gfx->setCursor(102, 20);
+    gfx->print(title_str);
   }
 
-  // 2. 大字百分比
-  gfx->setTextSize(4);
-  gfx->setTextColor(current_theme_color);
-  gfx->setCursor(20, 38);
+  // 2. 大数字百分比 (居中显示)
+  gfx->setTextSize(5); // 30x40 per char
+  gfx->setTextColor(theme_color);
   if (offline) {
+    gfx->setCursor(45, 66);
     gfx->print("--- %");
   } else {
-    gfx->printf("%d%%", (int)round(gemini_5h_remaining));
+    int pct_int = (int)round(cur_pct);
+    String num_str = String(pct_int) + "%";
+    int num_x = (240 - num_str.length() * 30) / 2;
+    gfx->setCursor(num_x, 66);
+    gfx->print(num_str);
   }
 
-  gfx->setTextSize(1);
-  gfx->setTextColor(COLOR_TEXT_WHITE);
-  gfx->setCursor(130, 48);
-  gfx->print("REMAINING");
-  gfx->setCursor(130, 60);
-  gfx->print("5h 额度剩余");
+  // 3. 进度条 (200x22 像素，圆角矩形边框)
+  int bar_x = 20, bar_y = 124, bar_w = 200, bar_h = 22;
+  gfx->drawRoundRect(bar_x, bar_y, bar_w, bar_h, 4, theme_color);
+  gfx->drawRoundRect(bar_x + 1, bar_y + 1, bar_w - 2, bar_h - 2, 3, theme_color);
 
-  // 3. 大进度条 (200x24 像素，圆角矩形边框)
-  int bar_x = 20, bar_y = 86, bar_w = 200, bar_h = 24;
-  gfx->drawRoundRect(bar_x, bar_y, bar_w, bar_h, 4, current_theme_color);
-  gfx->drawRoundRect(bar_x + 1, bar_y + 1, bar_w - 2, bar_h - 2, 3, current_theme_color);
-
-  // 进度填充
   int fill_max = bar_w - 8;
-  int fill_w = offline ? 0 : (int)((gemini_5h_remaining / 100.0f) * fill_max);
+  int fill_w = offline ? 0 : (int)((cur_pct / 100.0f) * fill_max);
   if (fill_w > fill_max) fill_w = fill_max;
   if (fill_w < 0) fill_w = 0;
 
   if (fill_w > 0) {
-    gfx->fillRoundRect(bar_x + 4, bar_y + 4, fill_w, bar_h - 8, 2, current_theme_color);
+    gfx->fillRoundRect(bar_x + 4, bar_y + 4, fill_w, bar_h - 8, 2, theme_color);
   }
 
-  // 4. 分割线
-  gfx->drawFastHLine(20, 122, 200, 0x3186);
+  // 4. 重置时间行 (全英文，居中)
+  if (current_page == 2 && sub_str.length() > 0) {
+    // Gemini Web 页一大一小：主重置时间 + 每周额度小字
+    gfx->setTextSize(2);
+    gfx->setTextColor(COLOR_TEXT_WHITE);
+    int rst_x = (240 - reset_str.length() * 12) / 2;
+    if (rst_x < 4) rst_x = 4;
+    gfx->setCursor(rst_x, 160);
+    gfx->print(reset_str);
 
-  // 5. 倒计时部分
-  gfx->setTextSize(1);
-  gfx->setTextColor(COLOR_TEXT_MUTED);
-  gfx->setCursor(20, 132);
-  gfx->print("5H WINDOW RESET / 重置倒计时:");
-
-  gfx->setTextSize(2);
-  gfx->setTextColor(current_theme_color);
-  gfx->setCursor(20, 146);
-  if (offline) {
-    gfx->print("离线等待中");
+    int sub_x = (240 - sub_str.length() * 12) / 2;
+    if (sub_x < 4) sub_x = 4;
+    gfx->setCursor(sub_x, 184);
+    gfx->print(sub_str);
   } else {
-    int hrs = gemini_5h_reset_secs / 3600;
-    int mins = (gemini_5h_reset_secs % 3600) / 60;
-    gfx->printf("%d 小时 %02d 分钟", hrs, mins);
+    gfx->setTextSize(2);
+    gfx->setTextColor(COLOR_TEXT_WHITE);
+    int rst_x = (240 - reset_str.length() * 12) / 2;
+    if (rst_x < 4) rst_x = 4;
+    gfx->setCursor(rst_x, 168);
+    gfx->print(reset_str);
   }
 
-  // 6. 每周额度小字
-  gfx->setTextSize(1);
-  gfx->setTextColor(COLOR_TEXT_MUTED);
-  gfx->setCursor(20, 176);
-  gfx->printf("每周额度: %.0f%% (Google AI Pro)", gemini_weekly_remaining);
-
-  // 7. 底部状态横幅
+  // 5. 底部报警横幅 (仅在报警或离线时提示)
   if (alarm_active) {
-    gfx->fillRoundRect(16, 198, 208, 30, 4, COLOR_RED);
+    gfx->fillRoundRect(12, 206, 216, 26, 4, COLOR_RED);
     gfx->setTextSize(1);
     gfx->setTextColor(COLOR_TEXT_WHITE);
-    gfx->setCursor(28, 208);
-    gfx->print("! 报警中: 拍手或按键即停 !");
+    gfx->setCursor(20, 215);
+    gfx->print("! ALARM: CLAP OR PRESS BTN !");
   } else if (offline) {
-    gfx->fillRoundRect(16, 198, 208, 30, 4, 0x4A69);
+    gfx->fillRoundRect(12, 206, 216, 26, 4, 0x4A69);
     gfx->setTextSize(1);
     gfx->setTextColor(COLOR_TEXT_WHITE);
-    gfx->setCursor(24, 208);
-    gfx->print("! 超过3分钟未更新 整屏变灰 !");
-  } else {
-    gfx->setTextSize(1);
-    gfx->setTextColor(COLOR_TEXT_MUTED);
-    gfx->setCursor(20, 212);
-    gfx->printf("IP: %s", WiFi.localIP().toString().c_str());
+    gfx->setCursor(22, 215);
+    gfx->print("! OFFLINE: WAITING DATA !");
   }
 
-  // 串口打印同步与画面信息
-  print_serial_summary();
-}
-
-void print_serial_summary() {
-  Serial.println("\n-------------------------------------------");
-  Serial.printf("[额度屏画面] 5h额度: %.1f%% | 重置倒计时: %d分 | 每周: %.0f%%\n",
-                gemini_5h_remaining, gemini_5h_reset_mins, gemini_weekly_remaining);
-  Serial.printf("颜色主题: %s | 离线状态: %s | 报警中: %s\n",
-                is_screen_gray ? "灰色(离线)" : (gemini_5h_remaining > 50 ? "绿色" : (gemini_5h_remaining >= 20 ? "黄色" : "红色")),
-                is_screen_gray ? "是(已超3分钟)" : "否",
-                alarm_active ? "是" : "否");
-  Serial.println("-------------------------------------------");
+  // 串口打印同步
+  Serial.printf("[DISPLAY] Page %d (%s): %.1f%% | %s\n",
+                current_page + 1, title_str.c_str(), cur_pct, reset_str.c_str());
 }
 
 // ==================== 从 YJW 小网页取数 ====================
 void poll_yjw_quota() {
   if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("[WIFI] 未连接，尝试重连...");
+    Serial.println("[WIFI] Disconnected, reconnecting...");
     WiFi.reconnect();
     return;
   }
@@ -410,82 +445,186 @@ void poll_yjw_quota() {
 
   if (httpCode == HTTP_CODE_OK) {
     String payload = http.getString();
-    StaticJsonDocument<1024> doc;
+    StaticJsonDocument<1536> doc;
     DeserializationError err = deserializeJson(doc, payload);
 
     if (!err) {
       last_data_received_ms = millis();
+      
+      // 1. Antigravity 5H
       gemini_5h_remaining = doc["gemini_5h_remaining_pct"] | 100.0f;
       gemini_5h_used      = doc["gemini_5h_used_pct"] | 0.0f;
       gemini_5h_reset_secs = doc["gemini_5h_reset_seconds"] | 0;
       gemini_5h_reset_mins = doc["gemini_5h_reset_minutes"] | 0;
+      String reset_at     = doc["gemini_5h_resets_at"] | "";
+      
+      // 2. Antigravity Weekly
       gemini_weekly_remaining = doc["gemini_weekly_remaining_pct"] | 100.0f;
+      gemini_weekly_reset_hrs = doc["gemini_weekly_reset_hours"] | 0;
+      
+      // 3. Gemini Web
+      gemini_web_5h_remaining = doc["gemini_web_5h_remaining_pct"] | 100.0f;
+      gemini_web_5h_used      = doc["gemini_web_5h_used_pct"] | 0.0f;
+      gemini_web_5h_reset_str = (const char*)(doc["gemini_web_5h_reset_str"] | "--:--");
+      gemini_web_weekly_remaining = doc["gemini_web_weekly_remaining_pct"] | 100.0f;
+      gemini_web_weekly_used      = doc["gemini_web_weekly_used_pct"] | 0.0f;
+      gemini_web_weekly_reset_str = (const char*)(doc["gemini_web_weekly_reset_str"] | "---");
+      
       server_hour         = doc["server_hour"] | 12;
       bool test_req       = doc["test_alarm"] | false;
-      String reset_at     = doc["gemini_5h_resets_at"] | "";
 
-      // 检测新窗口：当重置时间更新，重置当前窗口报警标记
+      // 检测新窗口：重置报警标记
       if (reset_at.length() > 0 && reset_at != last_window_id) {
         last_window_id = reset_at;
         alarm_reported_for_current_window = false;
-        Serial.println("[QUOTA] 新 5h 窗口开始，重置单窗口报警限制");
+        Serial.println("[QUOTA] New 5h window started, reset window alarm flag");
       }
 
       // 规则 1：5 小时额度剩 20% 以下时报警，每个窗口只报一次
       if (gemini_5h_remaining <= 20.0f && !alarm_reported_for_current_window) {
-        Serial.println("[QUOTA] 5h 额度已低于 20%，触发本窗口唯一一次警报！");
+        Serial.println("[QUOTA] 5h quota <= 20%, trigger window alarm!");
         alarm_reported_for_current_window = true;
         trigger_alarm();
       }
 
       // 规则 2：远程测试报警触发
       if (test_req && !alarm_active) {
-        Serial.println("[QUOTA] 收到 YJW 下发的测试报警指令！");
+        Serial.println("[QUOTA] Test alarm requested by server");
         test_alarm_flag = true;
         trigger_alarm();
       }
 
       render_display();
     } else {
-      Serial.printf("[HTTP] JSON 解析失败: %s\n", err.c_str());
+      Serial.printf("[HTTP] JSON parse failed: %s\n", err.c_str());
     }
   } else {
-    Serial.printf("[HTTP] 请求失败: code=%d\n", httpCode);
+    Serial.printf("[HTTP] Request failed: code=%d\n", httpCode);
   }
   http.end();
+}
+
+// 格式化固定宽度 ASCII 行（每行内容占 37 字符，加上两端 "| " 和 " |" 恰好 41 字符）
+static String format_ascii_line(const String& left_str, const String& right_str) {
+  int space_needed = 37 - left_str.length() - right_str.length();
+  if (space_needed < 1) space_needed = 1;
+  String line = "| " + left_str;
+  for (int i = 0; i < space_needed; i++) line += " ";
+  line += right_str + " |\n";
+  return line;
+}
+
+static String format_ascii_centered(const String& text) {
+  int total_pad = 37 - text.length();
+  if (total_pad < 0) total_pad = 0;
+  int l_pad = total_pad / 2;
+  int r_pad = total_pad - l_pad;
+  String line = "| ";
+  for (int i = 0; i < l_pad; i++) line += " ";
+  line += text;
+  for (int i = 0; i < r_pad; i++) line += " ";
+  line += " |\n";
+  return line;
+}
+
+// ASCII 屏幕文字快照生成器
+String get_ascii_screen_page(int page_idx) {
+  String p_name = (page_idx == 0) ? "5H" : ((page_idx == 1) ? "WEEKLY" : "GEMINI WEB");
+  float p_pct = (page_idx == 0) ? gemini_5h_remaining : ((page_idx == 1) ? gemini_weekly_remaining : gemini_web_5h_remaining);
+  
+  String txt = "+---------------------------------------+\n";
+  txt += format_ascii_line("PAGE " + String(page_idx + 1) + "/3: " + p_name, (WiFi.status() == WL_CONNECTED ? "WiFi OK" : "WiFi NO"));
+  txt += format_ascii_centered("");
+  
+  String pct_str = String((int)round(p_pct)) + "%";
+  txt += format_ascii_centered(pct_str);
+  txt += format_ascii_centered("REMAINING");
+  txt += format_ascii_centered("");
+  
+  int bars = (int)(p_pct / 100.0f * 25.0f);
+  if (bars > 25) bars = 25;
+  if (bars < 0) bars = 0;
+  String bar_str = "[";
+  for (int i = 0; i < 25; i++) bar_str += (i < bars) ? "=" : "-";
+  bar_str += "]";
+  txt += format_ascii_centered(bar_str);
+  txt += format_ascii_centered("");
+  
+  if (page_idx == 0) {
+    int hrs = gemini_5h_reset_secs / 3600;
+    int mins = (gemini_5h_reset_secs % 3600) / 60;
+    txt += format_ascii_centered("Resets in " + String(hrs) + "h " + String(mins) + "m");
+    txt += format_ascii_centered("");
+  } else if (page_idx == 1) {
+    int days = gemini_weekly_reset_hrs / 24;
+    int hrs = gemini_weekly_reset_hrs % 24;
+    txt += format_ascii_centered("Resets in " + String(days) + "d " + String(hrs) + "h");
+    txt += format_ascii_centered("");
+  } else {
+    txt += format_ascii_centered("5H Reset: " + gemini_web_5h_reset_str);
+    txt += format_ascii_centered("Weekly: " + String((int)round(gemini_web_weekly_remaining)) + "% (Reset " + gemini_web_weekly_reset_str + ")");
+  }
+  
+  if (alarm_active) {
+    txt += format_ascii_centered(">>> [ALARM] CLAP OR PRESS BTN <<<");
+  } else if (is_screen_gray) {
+    txt += format_ascii_centered(">>> [OFFLINE] WAITING DATA <<<");
+  } else {
+    String c = (p_pct > 50) ? "Green (>50%)" : ((p_pct >= 20) ? "Yellow (20-50%)" : "Red (<20%)");
+    txt += format_ascii_centered("Status: " + c);
+  }
+  txt += "+---------------------------------------+\n";
+  return txt;
 }
 
 // ==================== 内置 Web 服务（提供画面查看与远程控制） ====================
 void setup_web_server() {
   webServer.on("/", HTTP_GET, []() {
-    String html = "<!DOCTYPE html><html><head><meta charset='utf-8'><title>额度屏</title>";
+    String html = "<!DOCTYPE html><html><head><meta charset='utf-8'><title>Quota Screen</title>";
     html += "<meta name='viewport' content='width=device-width, initial-scale=1'>";
     html += "<style>body{background:#111;color:#eee;font-family:sans-serif;text-align:center;padding:20px;}";
-    html += ".card{background:#222;border-radius:12px;padding:24px;max-width:360px;margin:auto;}";
-    html += ".pct{font-size:48px;font-weight:bold;margin:10px 0;color:" + String(current_theme_color == COLOR_GREEN ? "#2ecc71" : (current_theme_color == COLOR_YELLOW ? "#f1c40f" : "#e74c3c")) + ";}";
-    html += ".bar{background:#333;height:20px;border-radius:10px;overflow:hidden;margin:15px 0;}";
-    html += ".fill{background:" + String(current_theme_color == COLOR_GREEN ? "#2ecc71" : (current_theme_color == COLOR_YELLOW ? "#f1c40f" : "#e74c3c")) + ";height:100%;width:" + String((int)gemini_5h_remaining) + "%;}";
-    html += ".btn{display:inline-block;padding:10px 20px;background:#e74c3c;color:#fff;border-radius:6px;text-decoration:none;margin-top:15px;}";
-    html += "</style></head><body><div class='card'>";
-    html += "<h2>Gemini 额度屏</h2>";
-    html += "<div class='pct'>" + String(gemini_5h_remaining, 1) + "%</div>";
-    html += "<div class='bar'><div class='fill'></div></div>";
-    html += "<p>距重置: " + String(gemini_5h_reset_secs / 3600) + "小时 " + String((gemini_5h_reset_secs % 3600) / 60) + "分钟</p>";
-    html += "<p>每周额度: " + String(gemini_weekly_remaining, 0) + "% (AI Pro)</p>";
-    html += "<p>状态: " + String(is_screen_gray ? "已变灰 (离线)" : "正常显示") + "</p>";
-    html += "<a href='/alarm' class='btn'>立即触发响铃测试 (拍手即停)</a>";
+    html += ".card{background:#222;border-radius:12px;padding:20px;max-width:340px;margin:15px auto;}";
+    html += ".btn{display:inline-block;padding:8px 16px;background:#3498db;color:#fff;border-radius:6px;text-decoration:none;margin:6px;}";
+    html += "</style></head><body><h2>Quota Meter ESP32</h2>";
+    html += "<div class='card'>";
+    html += "<p>Current Page: <b>Page " + String(current_page + 1) + " (" + ((current_page==0)?"5H":((current_page==1)?"WEEKLY":"GEMINI WEB")) + ")</b></p>";
+    html += "<a href='/switch?page=1' class='btn'>Page 1 (5H)</a>";
+    html += "<a href='/switch?page=2' class='btn'>Page 2 (WEEKLY)</a>";
+    html += "<a href='/switch?page=3' class='btn'>Page 3 (GEMINI WEB)</a>";
+    html += "<br><br><a href='/screen' class='btn' style='background:#2ecc71'>View Screen ASCII</a>";
+    html += "<a href='/alarm' class='btn' style='background:#e74c3c'>Trigger Alarm Test</a>";
     html += "</div></body></html>";
     webServer.send(200, "text/html; charset=utf-8", html);
   });
 
+  webServer.on("/switch", HTTP_GET, []() {
+    if (webServer.hasArg("page")) {
+      int p = webServer.arg("page").toInt();
+      if (p >= 1 && p <= 3) {
+        current_page = p - 1;
+        last_page_switch_ms = millis();
+        render_display();
+      }
+    }
+    webServer.sendHeader("Location", "/screen");
+    webServer.send(303, "text/plain", "Switched");
+  });
+
   webServer.on("/status", HTTP_GET, []() {
-    StaticJsonDocument<512> doc;
+    StaticJsonDocument<1024> doc;
     doc["device"] = "Waveshare-ESP32-S3-LCD-1.54";
     doc["mac"] = "80:45:6b:35:ae:ec";
     doc["ip"] = WiFi.localIP().toString();
+    doc["current_page"] = current_page + 1;
+    doc["page_name"] = (current_page == 0) ? "5H" : ((current_page == 1) ? "WEEKLY" : "GEMINI WEB");
     doc["gemini_5h_remaining_pct"] = gemini_5h_remaining;
     doc["gemini_5h_reset_minutes"] = gemini_5h_reset_mins;
     doc["gemini_weekly_remaining_pct"] = gemini_weekly_remaining;
+    doc["gemini_weekly_reset_hours"] = gemini_weekly_reset_hrs;
+    doc["gemini_web_5h_remaining_pct"] = gemini_web_5h_remaining;
+    doc["gemini_web_5h_reset_str"] = gemini_web_5h_reset_str;
+    doc["gemini_web_weekly_remaining_pct"] = gemini_web_weekly_remaining;
+    doc["gemini_web_weekly_reset_str"] = gemini_web_weekly_reset_str;
     doc["is_screen_gray"] = is_screen_gray;
     doc["alarm_active"] = alarm_active;
     doc["last_stop_reason"] = last_stop_reason;
@@ -498,39 +637,36 @@ void setup_web_server() {
   });
 
   // ASCII 屏幕文字快照（供远程确认画面）
+  // 支持 ?page=1, ?page=2, ?page=3 或 ?all=1
   webServer.on("/screen", HTTP_GET, []() {
-    String txt = "+---------------------------------------+\n";
-    txt += "| GEMINI 5H                     WiFi OK |\n";
-    txt += "|                                       |\n";
-    txt += "|               " + String(gemini_5h_remaining, 1) + "%                   |\n";
-    txt += "|              剩余额度                 |\n";
-    txt += "|                                       |\n";
-    int bars = (int)(gemini_5h_remaining / 100.0f * 25.0f);
-    txt += "| [";
-    for (int i = 0; i < 25; i++) {
-      txt += (i < bars) ? "=" : "-";
+    if (webServer.hasArg("switch")) {
+      int p = webServer.arg("page").toInt();
+      if (p >= 1 && p <= 3) {
+        current_page = p - 1;
+        last_page_switch_ms = millis();
+        render_display();
+      }
     }
-    txt += "] |\n";
-    txt += "|                                       |\n";
-    txt += "| 距重置: " + String(gemini_5h_reset_secs / 3600) + " 小时 " + String((gemini_5h_reset_secs % 3600) / 60) + " 分钟               |\n";
-    txt += "| 每周额度: " + String(gemini_weekly_remaining, 0) + "% (Google AI Pro)     |\n";
-    txt += "|                                       |\n";
-    if (alarm_active) {
-      txt += "| >>> [报警中] 拍手或按键即停 <<<       |\n";
-    } else if (is_screen_gray) {
-      txt += "| [已离线] 超过3分钟未更新 整屏变灰     |\n";
-    } else {
-      String color_str = (gemini_5h_remaining > 50) ? "绿色(充裕)" : (gemini_5h_remaining >= 20 ? "黄色(过半)" : "红色(见底)");
-      txt += "| 状态: 正常运行 (" + color_str + ")        |\n";
+    
+    if (webServer.hasArg("all")) {
+      String all_txt = get_ascii_screen_page(0) + "\n" + get_ascii_screen_page(1) + "\n" + get_ascii_screen_page(2);
+      webServer.send(200, "text/plain; charset=utf-8", all_txt);
+      return;
     }
-    txt += "+---------------------------------------+\n";
-    webServer.send(200, "text/plain; charset=utf-8", txt);
+    
+    int target_p = current_page;
+    if (webServer.hasArg("page")) {
+      int p = webServer.arg("page").toInt();
+      if (p >= 1 && p <= 3) target_p = p - 1;
+    }
+    
+    webServer.send(200, "text/plain; charset=utf-8", get_ascii_screen_page(target_p));
   });
 
   webServer.on("/alarm", HTTP_GET, []() {
     test_alarm_flag = true;
     trigger_alarm();
-    webServer.send(200, "text/plain; charset=utf-8", "已触发报警！板子将短响并在停响间隙监听拍手或按键。");
+    webServer.send(200, "text/plain; charset=utf-8", "Alarm triggered! Beep + clap/button listening started.");
   });
 
   webServer.on("/mic", HTTP_GET, []() {
@@ -549,7 +685,7 @@ void setup_web_server() {
   });
 
   webServer.begin();
-  Serial.println("[HTTP] 板载诊断网页已启动在 http://0.0.0.0:80/");
+  Serial.println("[HTTP] Web server started on port 80");
 }
 
 // ==================== 主流程 ====================
@@ -557,13 +693,13 @@ void setup() {
   Serial.begin(115200);
   delay(500);
   Serial.println("\n\n=========================================");
-  Serial.println("  Antigravity 额度屏 (Waveshare 1.54寸)  ");
+  Serial.println("  Antigravity Quota Meter v2.0 (3-Pages) ");
   Serial.println("=========================================");
 
   // 按键输入
-  pinMode(BTN_BOOT, INPUT_PULLUP);
-  pinMode(BTN_1,    INPUT_PULLUP);
-  pinMode(BTN_2,    INPUT_PULLUP);
+  pinMode(BTN_MAIN,   INPUT_PULLUP);
+  pinMode(BTN_VOL_UP, INPUT_PULLUP);
+  pinMode(BTN_VOL_DN, INPUT_PULLUP);
 
   // 初始化背光与 ST7789 屏幕
   pinMode(LCD_BL, OUTPUT);
@@ -571,20 +707,24 @@ void setup() {
   gfx->begin();
   gfx->fillScreen(COLOR_BG_NORMAL);
 
-  // 屏幕启动画面
-  gfx->setTextSize(2);
+  // 屏幕启动画面 (全英文)
+  gfx->setTextSize(3);
   gfx->setTextColor(COLOR_GREEN);
-  gfx->setCursor(35, 90);
-  gfx->print("Antigravity");
+  gfx->setCursor(35, 80);
+  gfx->print("QUOTA");
   gfx->setTextColor(COLOR_TEXT_WHITE);
-  gfx->setCursor(55, 120);
-  gfx->print("额度屏 v1.0");
+  gfx->setCursor(35, 115);
+  gfx->print("METER");
+  gfx->setTextSize(2);
+  gfx->setTextColor(COLOR_TEXT_MUTED);
+  gfx->setCursor(35, 150);
+  gfx->print("v2.0 3-PAGES");
 
   // 初始化音响与麦克风
   init_codecs();
 
   // 连接 Wi-Fi
-  Serial.printf("[WIFI] 正在连接 %s ...\n", WIFI_SSID);
+  Serial.printf("[WIFI] Connecting to %s ...\n", WIFI_SSID);
   WiFi.mode(WIFI_STA);
   WiFi.begin(WIFI_SSID, WIFI_PASS);
   int retry = 0;
@@ -596,15 +736,16 @@ void setup() {
   Serial.println();
 
   if (WiFi.status() == WL_CONNECTED) {
-    Serial.printf("[WIFI] 连接成功! 板子 IP: %s\n", WiFi.localIP().toString().c_str());
+    Serial.printf("[WIFI] Connected! IP: %s\n", WiFi.localIP().toString().c_str());
   } else {
-    Serial.println("[WIFI] 连接失败，将继续后台重试。");
+    Serial.println("[WIFI] Connect failed, will retry in background.");
   }
 
-  // 启动板载网页
   setup_web_server();
 
-  // 立即取一次数
+  // 立即取数并渲染默认 Page 1 (5H)
+  current_page = 0;
+  last_page_switch_ms = millis();
   poll_yjw_quota();
   render_display();
 }
@@ -620,7 +761,7 @@ void loop() {
 
   // 检查是否超时 3 分钟变灰
   if (!is_screen_gray && (millis() - last_data_received_ms > OFFLINE_TIMEOUT_MS)) {
-    Serial.println("[TIMEOUT] 超过 3 分钟未取到新数据，整屏变灰！");
+    Serial.println("[TIMEOUT] >3 mins without data, screen turned gray!");
     render_display();
   }
 
@@ -629,12 +770,42 @@ void loop() {
     handle_alarm_cycle();
   }
 
+  // 30秒无人操作自动回第1页
+  if (current_page != 0 && (millis() - last_page_switch_ms >= AUTO_RETURN_HOME_MS)) {
+    Serial.println("[UI] 30s timeout, auto-returning to Page 1 (5H)");
+    current_page = 0;
+    render_display();
+  }
+
   // 实体按键交互
-  if (digitalRead(BTN_BOOT) == LOW || digitalRead(BTN_1) == LOW || digitalRead(BTN_2) == LOW) {
+  // 左右音量键翻页，主按键关报警
+  bool btn_main = (digitalRead(BTN_MAIN) == LOW);
+  bool btn_up   = (digitalRead(BTN_VOL_UP) == LOW);
+  bool btn_dn   = (digitalRead(BTN_VOL_DN) == LOW);
+
+  if (btn_main || btn_up || btn_dn) {
     if (alarm_active) {
+      Serial.println("[BUTTON] Any button pressed during alarm -> stopping alarm");
       stop_alarm();
+    } else {
+      if (btn_up) {
+        // Next page
+        current_page = (current_page + 1) % 3;
+        last_page_switch_ms = millis();
+        Serial.printf("[BUTTON] Vol+ pressed -> Page %d\n", current_page + 1);
+        render_display();
+      } else if (btn_dn) {
+        // Prev page
+        current_page = (current_page + 2) % 3;
+        last_page_switch_ms = millis();
+        Serial.printf("[BUTTON] Vol- pressed -> Page %d\n", current_page + 1);
+        render_display();
+      } else if (btn_main) {
+        Serial.println("[BUTTON] Main button pressed (alarm not active)");
+      }
     }
-    delay(200);
+    // 按键防抖与长按延时
+    delay(250);
   }
 
   delay(20);
