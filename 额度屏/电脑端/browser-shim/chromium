@@ -1,0 +1,8 @@
+#!/bin/sh
+# 只供 quota-service 使用（靠服务自己的 PATH 指过来，系统其他地方不受影响）。
+# agy 想打开浏览器时走到这里：只把时间和链接记到桌面文件，不真开浏览器。
+ts=$(date '+%Y-%m-%d %H:%M:%S')
+dir="$HOME/桌面/agy掉登录记录"
+mkdir -p "$dir"
+printf '%s %s %s\n' "$ts" "$(basename "$0")" "$*" >> "$dir/记录.txt"
+exit 0

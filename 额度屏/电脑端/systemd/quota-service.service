@@ -1,0 +1,14 @@
+[Unit]
+Description=Antigravity Gemini Quota Monitor & HTTP Bridge for ESP32
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /home/yjw/quota-service/quota_service.py
+Restart=always
+RestartSec=5
+WorkingDirectory=/home/yjw/quota-service
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=default.target

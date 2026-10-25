@@ -1,0 +1,70 @@
+{
+  "hooks": {
+    "desktop-pet-monitor": {
+      "SessionStart": [
+        {
+          "type": "command",
+          "command": "/root/agy-hook.sh SessionStart"
+        }
+      ],
+      "PreInvocation": [
+        {
+          "type": "command",
+          "command": "/root/agy-hook.sh PreInvocation"
+        }
+      ],
+      "PreToolUse": [
+        {
+          "matcher": "*",
+          "hooks": [
+            {
+              "type": "command",
+              "command": "/root/agy-hook.sh PreToolUse"
+            }
+          ]
+        }
+      ],
+      "PostToolUse": [
+        {
+          "matcher": "*",
+          "hooks": [
+            {
+              "type": "command",
+              "command": "/root/agy-hook.sh PostToolUse"
+            }
+          ]
+        }
+      ],
+      "PostInvocation": [
+        {
+          "type": "command",
+          "command": "/root/agy-hook.sh PostInvocation"
+        }
+      ],
+      "Stop": [
+        {
+          "type": "command",
+          "command": "/root/agy-hook.sh Stop"
+        }
+      ]
+    }
+  },
+  "permissions": {
+    "allow": [
+      "command(*)",
+      "unsandboxed(*)",
+      "read_file(*)",
+      "write_file(*)",
+      "read_url(*)",
+      "execute_url(*)",
+      "mcp(*)"
+    ]
+  },
+  "statusLine": {
+    "type": "command",
+    "command": "/root/agy-statusline.sh"
+  },
+  "trustedWorkspaces": [
+    "/root"
+  ]
+}
