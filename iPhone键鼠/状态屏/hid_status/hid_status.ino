@@ -26,7 +26,8 @@
 const char *STATUS_URL = "http://192.168.7.1/cgi-bin/paidan";
 const unsigned long POLL_MS = 60000;
 const unsigned long STALE_MS = 180000;
-const int WATCHDOG_MS = 8000;
+const int WATCHDOG_HID_MS = 8000;
+const int WATCHDOG_STATUS_MS = 20000;
 
 // ---- pins (Waveshare ESP32-S3-LCD-1.54) ----
 #define LCD_DC 45
@@ -508,13 +509,23 @@ String field(const String &line, int idx) {
 }
 
 char poll() {
-  if (WiFi.status() != WL_CONNECTED) return 0;
+  wl_status_t ws = WiFi.status();
+  if (ws != WL_CONNECTED) {
+    Serial.printf("[STATUS] Wi-Fi status: %d (not connected)\n", (int)ws);
+    return 0;
+  }
+  Serial.printf("[STATUS] Wi-Fi status: %d (connected, IP: %s)\n", (int)ws, WiFi.localIP().toString().c_str());
   HTTPClient http;
-  http.setConnectTimeout(3000);
-  http.setTimeout(3000);
-  if (!http.begin(STATUS_URL)) return 0;
+  http.setConnectTimeout(8000);
+  http.setTimeout(8000);
+  if (!http.begin(STATUS_URL)) {
+    Serial.println("[STATUS] http.begin failed");
+    return 0;
+  }
   int code = http.GET();
   String body = code == 200 ? http.getString() : "";
+  int len = body.length();
+  Serial.printf("[STATUS] HTTP code: %d, body length: %d\n", code, len);
   http.end();
   esp_task_wdt_reset();
   if (code != 200) return 0;
@@ -545,6 +556,7 @@ Preferences prefs;
 bool mainWasDown = false;
 
 void statusSetup() {
+  Serial.begin(115200);
   pinMode(BTN_MAIN, INPUT_PULLUP);
   pinMode(BTN_UP, INPUT_PULLUP);
   pinMode(BTN_DN, INPUT_PULLUP);
@@ -587,7 +599,7 @@ void setup() {
   mouse.begin();
   USB.productName("HID Bridge");
   USB.begin();
-  esp_task_wdt_config_t wdt = {.timeout_ms = WATCHDOG_MS, .idle_core_mask = 0, .trigger_panic = true};
+  esp_task_wdt_config_t wdt = {.timeout_ms = WATCHDOG_HID_MS, .idle_core_mask = 0, .trigger_panic = true};
   esp_task_wdt_reconfigure(&wdt);
   esp_task_wdt_add(NULL);
 
@@ -603,6 +615,8 @@ void setup() {
     pinMode(LCD_BL, OUTPUT);
     digitalWrite(LCD_BL, LOW);
   } else {
+    esp_task_wdt_config_t wdt_status = {.timeout_ms = WATCHDOG_STATUS_MS, .idle_core_mask = 0, .trigger_panic = true};
+    esp_task_wdt_reconfigure(&wdt_status);
     statusSetup();
   }
 }
