@@ -372,7 +372,7 @@ void initAudio() {
     const es8311_clock_config_t clk = {false, false, true, 16000 * 256, 16000};
     if (es8311_init(es8311, &clk, ES8311_RESOLUTION_16, ES8311_RESOLUTION_16) == ESP_OK) {
       es8311_sample_frequency_config(es8311, 16000 * 256, 16000);
-      es8311_voice_volume_set(es8311, 85, NULL);
+      es8311_voice_volume_set(es8311, 100, NULL);
       audioOk = true;
     }
   }
@@ -466,7 +466,14 @@ void alarm(char kind) {
 }
 
 // ---- data ----
-struct Seen { int id; char code; };
+const unsigned long REMIND_INTERVAL_MS = 10UL * 60UL * 1000UL;  // 10 minutes
+
+struct Seen {
+  int id;
+  char code;
+  unsigned long enterTime;
+  bool reminded;
+};
 Seen seen[64];
 int nSeen = 0;
 bool firstFetch = true;
@@ -485,13 +492,41 @@ char eventFrom(const String &list) {
       int id = item.substring(0, colon).toInt();
       char code = item[colon + 1];
       char before = 0;
-      for (int i = 0; i < nSeen; i++) if (seen[i].id == id) before = seen[i].code;
-      if (!firstFetch && before != code) {
-        int rank = code == 'w' ? 3 : code == 's' ? 2 : code == 'd' ? 1 : 0;
-        int cur = ev == 'w' ? 3 : ev == 's' ? 2 : ev == 'd' ? 1 : 0;
-        if (rank > cur) ev = code;
+      unsigned long enterTime = 0;
+      bool reminded = false;
+      bool found = false;
+
+      for (int i = 0; i < nSeen; i++) {
+        if (seen[i].id == id) {
+          before = seen[i].code;
+          enterTime = seen[i].enterTime;
+          reminded = seen[i].reminded;
+          found = true;
+          break;
+        }
       }
-      now[n++] = {id, code};
+
+      if (!found || before != code) {
+        enterTime = (code == 'w' || code == 's') ? millis() : 0;
+        reminded = false;
+        if (!firstFetch && before != code) {
+          int rank = code == 'w' ? 3 : code == 's' ? 2 : code == 'd' ? 1 : 0;
+          int cur = ev == 'w' ? 3 : ev == 's' ? 2 : ev == 'd' ? 1 : 0;
+          if (rank > cur) ev = code;
+        }
+      } else {
+        if ((code == 'w' || code == 's') && !reminded) {
+          if (millis() - enterTime >= REMIND_INTERVAL_MS) {
+            reminded = true;
+            Serial.printf("[STATUS] Order %d (%c) 10m reminder triggered\n", id, code);
+            int rank = code == 'w' ? 3 : code == 's' ? 2 : code == 'd' ? 1 : 0;
+            int cur = ev == 'w' ? 3 : ev == 's' ? 2 : ev == 'd' ? 1 : 0;
+            if (rank > cur) ev = code;
+          }
+        }
+      }
+
+      now[n++] = {id, code, enterTime, reminded};
     }
     start = comma + 1;
   }
