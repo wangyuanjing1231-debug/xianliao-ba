@@ -102,7 +102,11 @@ class H(BaseHTTPRequestHandler):
                     f.write(f"{datetime.now(TZ):%m-%d %H:%M:%S} {self.client_address[0]}\n")
                 rows = view(db, now)
                 waiting = sum(1 for r in rows if r["state"] == "等你")
-                out = [f"{datetime.now(TZ):%H:%M}\t{waiting}\t{max(len(rows) - 4, 0)}"]
+                today = datetime.now(TZ).date()
+                today_orders = [o for o in db["orders"] if datetime.fromtimestamp(o.get("sent", 0), TZ).date() == today]
+                today_done = sum(1 for o in today_orders if o.get("state") == "完成")
+                today_total = len(today_orders)
+                out = [f"{today_done}/{today_total}\t{waiting}\t0"]
                 code = {"等你": "w", "卡住": "s", "在跑": "r", "完成": "d"}
                 out.append("E\t" + ",".join(f"{r['id']}:{code[r['state']]}" for r in rows))
                 for r in rows[:4]:

@@ -17,6 +17,7 @@
 #include "es7210.h"
 #include "secrets.h"  // WIFI_SSID, WIFI_PASS, SERVER_HOST, SERVER_PORT
 #include "fonts.h"
+#include "audio_data.h"
 
 #ifndef FORCE_STATUS
 #define FORCE_STATUS 0  // 1: status screen even when a USB host is present (bench test)
@@ -290,7 +291,7 @@ String dur(long sec) {
 struct Row { String state, worker, task, why; long age; bool faded; };
 Row rows[4];
 int nRows = 0, nWaiting = 0, nExtra = 0;
-String clockStr = "--:--";
+String countStr = "-/-";
 bool haveData = false, muted = false;
 unsigned long lastOk = 0, lastPoll = 0;
 bool shownStale = false;
@@ -320,7 +321,7 @@ void render() {
   else left = running ? "在跑 " + String(running) : "派单";
   fill(0, 0, W - 1, HEAD - 1, hbg);
   drawText(F_HEAD, 10, HEAD / 2, left, hfg);
-  String right = clockStr + (nExtra && !stale ? "  +" + String(nExtra) : "");
+  String right = countStr;
   int rx = W - 10 - textWidth(F_HEAD, right);
   drawText(F_HEAD, rx, HEAD / 2, right, hfg);
   if (muted) drawText(F_HEAD, rx - 8 - textWidth(F_HEAD, "静音"), HEAD / 2, "静音", hfg);
@@ -372,7 +373,7 @@ void initAudio() {
     const es8311_clock_config_t clk = {false, false, true, 16000 * 256, 16000};
     if (es8311_init(es8311, &clk, ES8311_RESOLUTION_16, ES8311_RESOLUTION_16) == ESP_OK) {
       es8311_sample_frequency_config(es8311, 16000 * 256, 16000);
-      es8311_voice_volume_set(es8311, 100, NULL);
+      es8311_voice_volume_set(es8311, 85, NULL);
       audioOk = true;
     }
   }
@@ -392,24 +393,8 @@ void initAudio() {
   i2s.begin(I2S_MODE_STD, 16000, I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO);
 }
 
-// one note: sine with a soft attack and exponential decay, so it rings instead of clicking
-void note(float hz, int ms, float vol) {
-  const int rate = 16000;
-  int total = rate * ms / 1000;
-  int16_t buf[128 * 2];
-  float ph = 0, step = 2 * PI * hz / rate;
-  for (int done = 0; done < total;) {
-    int n = min(128, total - done);
-    for (int i = 0; i < n; i++, done++) {
-      float t = (float)done / total;
-      float env = min(1.0f, done / 80.0f) * expf(-3.0f * t);
-      float s = sinf(ph) + 0.25f * sinf(2 * ph);
-      int16_t v = (int16_t)(s * env * vol * 16000.0f);
-      buf[i * 2] = buf[i * 2 + 1] = v;
-      ph += step;
-    }
-    i2s.write((uint8_t *)buf, n * 4);
-  }
+bool anyButton() {
+  return digitalRead(BTN_MAIN) == LOW || digitalRead(BTN_UP) == LOW || digitalRead(BTN_DN) == LOW;
 }
 
 void silence(int ms) {
@@ -418,20 +403,37 @@ void silence(int ms) {
   for (int done = 0; done < total; done += 128) i2s.write((uint8_t *)buf, min(128, total - done) * 4);
 }
 
-void playPattern(char kind) {
-  if (!audioOk) return;
+// play recorded wav audio. Returns true if aborted early by button press.
+bool playPattern(char kind) {
+  if (!audioOk) return false;
+  const int16_t *pcm = nullptr;
+  int total = 0;
+  if (kind == 'd') { pcm = audio_done; total = AUDIO_DONE_LEN; }
+  else if (kind == 'w') { pcm = audio_wait; total = AUDIO_WAIT_LEN; }
+  else if (kind == 's') { pcm = audio_stuck; total = AUDIO_STUCK_LEN; }
+  else return false;
+
   digitalWrite(PA_CTRL, HIGH);
   silence(30);
-  if (kind == 'd') { note(1047, 140, 0.8f); silence(20); note(1568, 320, 0.8f); }
-  else if (kind == 'w') { note(1047, 150, 1.0f); silence(40); note(1319, 150, 1.0f); silence(40); note(1568, 260, 1.0f); }
-  else if (kind == 's') { note(523, 200, 1.0f); silence(90); note(523, 200, 1.0f); }
-  silence(250);  // let the DMA drain before the amp goes off (the old meter cut its own beep short here)
+
+  bool stopped = false;
+  int16_t frame[128 * 2];
+  for (int done = 0; done < total;) {
+    esp_task_wdt_reset();
+    if (anyButton()) { stopped = true; break; }
+    int n = min(128, total - done);
+    for (int i = 0; i < n; i++) {
+      int16_t s = pcm[done + i];
+      frame[i * 2] = frame[i * 2 + 1] = s;
+    }
+    i2s.write((uint8_t *)frame, n * 4);
+    done += n;
+  }
+
+  silence(stopped ? 50 : 250);  // drain DMA before amp turns off
   digitalWrite(PA_CTRL, LOW);
   esp_task_wdt_reset();
-}
-
-bool anyButton() {
-  return digitalRead(BTN_MAIN) == LOW || digitalRead(BTN_UP) == LOW || digitalRead(BTN_DN) == LOW;
+  return stopped;
 }
 
 // listen for a clap or a button press for ms; true if the person reacted
@@ -458,8 +460,8 @@ void alarm(char kind) {
   if (kind == 'd') { playPattern('d'); return; }
   unsigned long t0 = millis();
   while (millis() - t0 < 60000) {
-    playPattern(kind);
-    if (listenStop(2700)) break;
+    if (playPattern(kind)) break;
+    if (listenStop(1000)) break;
   }
   while (anyButton()) { delay(10); esp_task_wdt_reset(); }  // the stopping press must not also toggle mute
   delay(150);
@@ -573,7 +575,7 @@ char poll() {
     String line = body.substring(pos, e);
     pos = e + 1;
     if (!line.length()) continue;
-    if (ln == 0) { clockStr = field(line, 0); nWaiting = field(line, 1).toInt(); nExtra = field(line, 2).toInt(); }
+    if (ln == 0) { countStr = field(line, 0); nWaiting = field(line, 1).toInt(); nExtra = field(line, 2).toInt(); }
     else if (line.startsWith("E\t")) ev = eventFrom(line.substring(2));
     else if (r < 4) {
       rows[r] = {field(line, 0), field(line, 1), field(line, 2), field(line, 3), field(line, 4).toInt(), field(line, 5) == "1"};
