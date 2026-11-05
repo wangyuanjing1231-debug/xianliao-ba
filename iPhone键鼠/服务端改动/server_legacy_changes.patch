@@ -1,0 +1,29 @@
+diff --git a/server/hidagent/app.py b/server/hidagent/app.py
+index 891bdae..a11f3dd 100644
+--- a/server/hidagent/app.py
++++ b/server/hidagent/app.py
+@@ -237,3 +237,11 @@ def agent_clear():
+     except RuntimeError as e:
+         raise HTTPException(409, str(e)) from e
+     return {"ok": True}
++
++
++@app.post("/api/rclick")
++async def rclick():
++    """Right mouse button; on iPhone assign it to Home in AssistiveTouch device settings."""
++    async def send():
++        await device.send("rclick")
++    return await act(send)
+diff --git a/server/hidagent/screen.py b/server/hidagent/screen.py
+index 7c813ad..554ebb1 100644
+--- a/server/hidagent/screen.py
++++ b/server/hidagent/screen.py
+@@ -104,7 +104,7 @@ class Screen:
+         sink = (f"videorate drop-only=true ! video/x-raw,framerate={self.fps}/1 ! "
+                 f"jpegenc quality={self.quality} ! {sink}")
+         uxplay = os.environ.get("UXPLAY", "uxplay")  # e.g. C:/msys64/ucrt64/bin/uxplay.exe
+-        self._proc = subprocess.Popen([uxplay, "-n", self.name, "-nh", "-a", "-reset", "0", "-vs", sink],
++        self._proc = subprocess.Popen(["stdbuf", "-oL", "-eL", uxplay, "-avdec", "-d", "-n", self.name, "-nh", "-a", "-reset", "0", "-vs", sink],
+                                       **popen)  # UxPlay logs to stdout: keep them in ours
+         if self.pidfile:
+             Path(self.pidfile).write_text(str(self._proc.pid))

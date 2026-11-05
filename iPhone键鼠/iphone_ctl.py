@@ -172,7 +172,7 @@ def cmd_swipe(args):
 def cmd_home(args):
     """回主屏幕"""
     try:
-        _post_json("/api/home")
+        _post_json("/api/rclick")  # 右键=回主屏（iPhone 辅助触控里给右键分配了主屏幕）
         print("回主屏幕成功")
     except RuntimeError as e:
         _handle_error("回主屏幕", e)
