@@ -22,7 +22,8 @@
 #define FORCE_STATUS 0  // 1: status screen even when a USB host is present (bench test)
 #endif
 
-const char *STATUS_URL = "http://100.81.27.34:8893/screen";
+// floor2 relays to the vpn-us ledger (TCP from the board straight over Tailscale is lost in the router's offload)
+const char *STATUS_URL = "http://192.168.7.1/cgi-bin/paidan";
 const unsigned long POLL_MS = 60000;
 const unsigned long STALE_MS = 180000;
 const int WATCHDOG_MS = 8000;
