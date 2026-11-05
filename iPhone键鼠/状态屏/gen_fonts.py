@@ -22,7 +22,7 @@ FONTS = [
     ("F_SMALL", "Regular", 14, FULL),
     ("F_SMALLB", "Bold", 14, ASCII),
     ("F_HEAD", "Bold", 15, ASCII + "等你过时卡住在跑派单静音连接中"),
-    ("F_EMPTY", "Medium", 18, "没有在跑的单"),
+    ("F_EMPTY", "Regular", 18, "没有在跑的单"),
 ]
 
 def build(name, weight, size, chars):
