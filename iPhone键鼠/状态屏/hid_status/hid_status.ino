@@ -430,7 +430,7 @@ bool playPattern(char kind) {
     done += n;
   }
 
-  silence(stopped ? 50 : 250);  // drain DMA before amp turns off
+  silence(stopped ? 50 : 30);  // drain DMA before amp turns off
   digitalWrite(PA_CTRL, LOW);
   esp_task_wdt_reset();
   return stopped;
@@ -449,8 +449,11 @@ bool listenStop(int ms) {
     if (anyButton()) return true;
     if (!micOk) { delay(10); continue; }
     size_t br = i2s.readBytes((char *)buf, sizeof buf);
-    for (size_t i = 0; i < br / 4; i++)
-      if (abs(buf[i * 2]) > 12000) return true;
+    for (size_t i = 0; i < br / 4; i++) {
+      int16_t left = abs(buf[i * 2]);
+      int16_t right = abs(buf[i * 2 + 1]);
+      if (max(left, right) > 6000) return true;
+    }
   }
   return false;
 }
@@ -461,7 +464,7 @@ void alarm(char kind) {
   unsigned long t0 = millis();
   while (millis() - t0 < 60000) {
     if (playPattern(kind)) break;
-    if (listenStop(1000)) break;
+    if (listenStop(3000)) break;
   }
   while (anyButton()) { delay(10); esp_task_wdt_reset(); }  // the stopping press must not also toggle mute
   delay(150);
