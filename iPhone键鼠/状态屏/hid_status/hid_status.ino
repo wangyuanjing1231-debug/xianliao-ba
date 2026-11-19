@@ -1,7 +1,6 @@
-// Dual-mode board: plugged into a USB host (the iPhone) it is the HID bridge
-// (mouse + keyboard driven over TCP, same as hid_bridge); powered by a charger
-// (no USB host) it is the dispatch status screen fed by vpn-us.
+// Waveshare ESP32-S3-LCD-1.54 dispatch status screen fed by vpn-us via floor2.
 
+#include <math.h>
 #include <WiFi.h>
 #include <HTTPClient.h>
 #include <Preferences.h>
@@ -9,26 +8,17 @@
 #include <esp_task_wdt.h>
 #include <Arduino_GFX_Library.h>
 #include "ESP_I2S.h"
-#include "USB.h"
-#include "USBHIDMouse.h"
-#include "USBHIDKeyboard.h"
-#include "tusb.h"
 #include "es8311.h"
 #include "es7210.h"
-#include "secrets.h"  // WIFI_SSID, WIFI_PASS, SERVER_HOST, SERVER_PORT
+#include "secrets.h"  // WIFI_SSID, WIFI_PASS
 #include "fonts.h"
 #include "audio_data.h"
-
-#ifndef FORCE_STATUS
-#define FORCE_STATUS 0  // 1: status screen even when a USB host is present (bench test)
-#endif
 
 // floor2 relays to the vpn-us ledger (TCP from the board straight over Tailscale is lost in the router's offload)
 const char *STATUS_URL = "http://192.168.7.1/cgi-bin/paidan";
 const unsigned long POLL_MS = 60000;
 const unsigned long STALE_MS = 180000;
-const int WATCHDOG_HID_MS = 8000;
-const int WATCHDOG_STATUS_MS = 20000;
+const int WATCHDOG_STATUS_MS = 25000;
 
 // ---- pins (Waveshare ESP32-S3-LCD-1.54) ----
 #define LCD_DC 45
@@ -50,119 +40,7 @@ const int WATCHDOG_STATUS_MS = 20000;
 #define BTN_DN 0
 
 // =====================================================================
-// HID bridge (unchanged behaviour from hid_bridge.ino)
-// =====================================================================
-const int STEP = 10;
-const int STEP_MS = 8;
-const int HOME_REPORTS = 50;
-
-USBHIDKeyboard keyboard;
-USBHIDMouse mouse;
-WiFiClient server;
-
-void movePaced(long dx, long dy) {
-  while (dx || dy) {
-    int sx = constrain(dx, -STEP, STEP), sy = constrain(dy, -STEP, STEP);
-    mouse.move(sx, sy);
-    dx -= sx;
-    dy -= sy;
-    delay(STEP_MS);
-  }
-}
-
-uint8_t keyCode(const String &k) {
-  if (k == "enter") return KEY_RETURN;
-  if (k == "esc") return KEY_ESC;
-  if (k == "tab") return KEY_TAB;
-  if (k == "backspace") return KEY_BACKSPACE;
-  if (k == "space") return ' ';
-  if (k == "up") return KEY_UP_ARROW;
-  if (k == "down") return KEY_DOWN_ARROW;
-  if (k == "left") return KEY_LEFT_ARROW;
-  if (k == "right") return KEY_RIGHT_ARROW;
-  if (k == "cmd") return KEY_LEFT_GUI;
-  if (k == "ctrl") return KEY_LEFT_CTRL;
-  if (k == "alt") return KEY_LEFT_ALT;
-  if (k == "shift") return KEY_LEFT_SHIFT;
-  return k.length() == 1 ? k[0] : 0;
-}
-
-bool pressCombo(String combo) {
-  combo += '+';
-  for (int i; (i = combo.indexOf('+')) >= 0; combo = combo.substring(i + 1)) {
-    uint8_t c = keyCode(combo.substring(0, i));
-    if (!c) { keyboard.releaseAll(); return false; }
-    keyboard.press(c);
-  }
-  delay(30);
-  keyboard.releaseAll();
-  return true;
-}
-
-bool usbReady() {
-  if (tud_suspended()) {
-    tud_remote_wakeup();
-    for (int i = 0; i < 50 && tud_suspended(); i++) delay(10);
-  }
-  return tud_mounted() && !tud_suspended();
-}
-
-String run(const String &line) {
-  int sp = line.indexOf(' ');
-  String cmd = sp < 0 ? line : line.substring(0, sp);
-  String arg = sp < 0 ? "" : line.substring(sp + 1);
-  long a = 0, b = 0;
-  sscanf(arg.c_str(), "%ld %ld", &a, &b);
-
-  if (cmd == "ping") return "ok";
-  if (!usbReady()) return "err phone usb asleep (unlock the phone)";
-  if (cmd == "home") {
-    for (int i = 0; i < HOME_REPORTS; i++) { mouse.move(-127, -127); delay(2); }
-    return "ok";
-  }
-  if (cmd == "move") { movePaced(a, b); return "ok"; }
-  if (cmd == "press") { mouse.press(MOUSE_LEFT); return "ok"; }
-  if (cmd == "release") { mouse.release(MOUSE_LEFT); return "ok"; }
-  if (cmd == "rclick") { mouse.press(MOUSE_RIGHT); delay(60); mouse.release(MOUSE_RIGHT); return "ok"; }
-  if (cmd == "mclick") { mouse.press(MOUSE_MIDDLE); delay(60); mouse.release(MOUSE_MIDDLE); return "ok"; }
-  if (cmd == "click") { mouse.press(MOUSE_LEFT); delay(60); mouse.release(MOUSE_LEFT); return "ok"; }
-  if (cmd == "scroll") { mouse.move(0, 0, a, b); return "ok"; }
-  if (cmd == "type") { keyboard.print(arg); return "ok"; }
-  if (cmd == "key") return pressCombo(arg) ? "ok" : "err unknown key";
-  return "err unknown command";
-}
-
-const char *resetReason() {
-  switch (esp_reset_reason()) {
-    case ESP_RST_POWERON: return "power-on";
-    case ESP_RST_BROWNOUT: return "brownout";
-    case ESP_RST_TASK_WDT: case ESP_RST_INT_WDT: case ESP_RST_WDT: return "watchdog";
-    case ESP_RST_PANIC: return "crash";
-    case ESP_RST_SW: return "software";
-    case ESP_RST_USB: return "usb";
-    default: return "other";
-  }
-}
-
-void hidLoop() {
-  if (WiFi.status() != WL_CONNECTED) { mouse.release(MOUSE_LEFT); delay(50); return; }
-  if (!server.connected()) {
-    mouse.release(MOUSE_LEFT);
-    keyboard.releaseAll();
-    if (!server.connect(SERVER_HOST, SERVER_PORT, 1000)) { delay(200); return; }
-    server.setNoDelay(true);
-    server.printf("hello %s %lu\n", resetReason(), millis());
-  }
-  if (server.available()) {
-    String line = server.readStringUntil('\n');
-    line.trim();
-    if (!line.length()) return;
-    server.print(run(line) + "\n");
-  }
-}
-
-// =====================================================================
-// Status screen
+// Display
 // =====================================================================
 #define W 240
 #define H 240
@@ -290,11 +168,18 @@ String dur(long sec) {
 
 struct Row { String state, worker, task, why; long age; bool faded; };
 Row rows[4];
-int nRows = 0, nWaiting = 0, nExtra = 0;
+int nRows = 0, nWaiting = 0;
 String countStr = "-/-";
 bool haveData = false, muted = false;
 unsigned long lastOk = 0, lastPoll = 0;
 bool shownStale = false;
+
+// Configurable parameters pushed by vpn-us (/screen line 0 col 2)
+int cfgWaitRepeats = 3;
+int cfgStuckRepeats = 2;
+int cfgTtsRepeats = 2;
+int cfgQuietMin = 20;
+int cfgMicThresh = 200;
 
 uint16_t stateColor(const String &s) {
   if (s == "等你") return C_WAIT;
@@ -358,11 +243,17 @@ void render() {
   shownStale = stale;
 }
 
-// ---- sound ----
+// =====================================================================
+// Sound & Microphone
+// =====================================================================
 I2SClass i2s;
 es8311_handle_t es8311 = nullptr;
 es7210_dev_handle_t es7210 = nullptr;
 bool audioOk = false, micOk = false;
+
+uint8_t *ttsBuf = nullptr;
+size_t ttsCap = 0;
+unsigned long speakerOffMs = 0;
 
 void initAudio() {
   Wire.begin(I2C_SDA, I2C_SCL);
@@ -391,37 +282,51 @@ void initAudio() {
   }
   i2s.setPins(I2S_BCLK, I2S_WS, I2S_DOUT, I2S_DIN, I2S_MCLK);
   i2s.begin(I2S_MODE_STD, 16000, I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO);
+  Serial.printf("[AUDIO] speaker=%d mic=%d psram=%u freeHeap=%u\n",
+                audioOk, micOk, (unsigned)ESP.getPsramSize(), (unsigned)ESP.getFreeHeap());
 }
 
 bool anyButton() {
   return digitalRead(BTN_MAIN) == LOW || digitalRead(BTN_UP) == LOW || digitalRead(BTN_DN) == LOW;
 }
 
-void silence(int ms) {
-  int16_t buf[128 * 2] = {0};
-  int total = 16000 * ms / 1000;
-  for (int done = 0; done < total; done += 128) i2s.write((uint8_t *)buf, min(128, total - done) * 4);
+void flushMic() {
+  if (!micOk) return;
+  int16_t buf[256 * 2];
+  for (int i = 0; i < 8; i++) {
+    esp_task_wdt_reset();
+    i2s.readBytes((char *)buf, sizeof buf);
+  }
 }
 
-// play recorded wav audio. Returns true if aborted early by button press.
-bool playPattern(char kind) {
-  if (!audioOk) return false;
-  const int16_t *pcm = nullptr;
-  int total = 0;
-  if (kind == 'd') { pcm = audio_done; total = AUDIO_DONE_LEN; }
-  else if (kind == 'w') { pcm = audio_wait; total = AUDIO_WAIT_LEN; }
-  else if (kind == 's') { pcm = audio_stuck; total = AUDIO_STUCK_LEN; }
-  else return false;
+void silence(int ms) {
+  int16_t buf[160 * 2] = {0};
+  int chunks = (ms + 9) / 10;
+  for (int c = 0; c < chunks; c++) {
+    esp_task_wdt_reset();
+    i2s.write((uint8_t *)buf, sizeof buf);
+  }
+}
 
-  digitalWrite(PA_CTRL, HIGH);
-  silence(30);
+bool silenceAbortable(int ms) {
+  int16_t buf[160 * 2] = {0};
+  int chunks = (ms + 9) / 10;
+  for (int c = 0; c < chunks; c++) {
+    esp_task_wdt_reset();
+    if (anyButton()) return true;
+    i2s.write((uint8_t *)buf, sizeof buf);
+  }
+  return false;
+}
 
+bool playPcmChunk(const int16_t *pcm, int totalSamples) {
+  if (!audioOk || !pcm || totalSamples <= 0) return false;
   bool stopped = false;
   int16_t frame[128 * 2];
-  for (int done = 0; done < total;) {
+  for (int done = 0; done < totalSamples;) {
     esp_task_wdt_reset();
     if (anyButton()) { stopped = true; break; }
-    int n = min(128, total - done);
+    int n = min(128, totalSamples - done);
     for (int i = 0; i < n; i++) {
       int16_t s = pcm[done + i];
       frame[i * 2] = frame[i * 2 + 1] = s;
@@ -429,64 +334,119 @@ bool playPattern(char kind) {
     i2s.write((uint8_t *)frame, n * 4);
     done += n;
   }
-
-  silence(stopped ? 50 : 30);  // drain DMA before amp turns off
-  digitalWrite(PA_CTRL, LOW);
-  esp_task_wdt_reset();
   return stopped;
 }
 
-// listen for a clap or a button press for ms; true if the person reacted
-bool listenStop(int ms) {
-  int16_t buf[128 * 2];
-  unsigned long t0 = millis();
-  while (millis() - t0 < 250) {  // skip the tail of our own sound
-    if (micOk) i2s.readBytes((char *)buf, sizeof buf); else delay(10);
-    if (anyButton()) return true;
-  }
-  while (millis() - t0 < (unsigned long)ms) {
-    esp_task_wdt_reset();
-    if (anyButton()) return true;
-    if (!micOk) { delay(10); continue; }
-    size_t br = i2s.readBytes((char *)buf, sizeof buf);
-    for (size_t i = 0; i < br / 4; i++) {
-      int16_t left = abs(buf[i * 2]);
-      int16_t right = abs(buf[i * 2 + 1]);
-      if (max(left, right) > 6000) return true;
-    }
-  }
-  return false;
+void playDoneOnce() {
+  if (!audioOk) return;
+  digitalWrite(PA_CTRL, HIGH);
+  silence(30);
+  bool stopped = playPcmChunk(audio_done, AUDIO_DONE_LEN);
+  silence(stopped ? 50 : 30);
+  digitalWrite(PA_CTRL, LOW);
+  speakerOffMs = millis();
+  flushMic();
 }
 
-void alarm(char kind) {
-  if (muted || !kind) return;
-  if (kind == 'd') { playPattern('d'); return; }
-  unsigned long t0 = millis();
-  while (millis() - t0 < 60000) {
-    if (playPattern(kind)) break;
-    if (listenStop(3000)) break;
+class PcmSink : public Stream {
+  uint8_t *buf;
+  size_t cap, len;
+ public:
+  PcmSink(uint8_t *b, size_t c) : buf(b), cap(c), len(0) {}
+  size_t write(uint8_t b) override { return write(&b, 1); }
+  size_t write(const uint8_t *data, size_t n) override {
+    esp_task_wdt_reset();
+    if (!buf || len >= cap) return n;
+    size_t take = min(n, cap - len);
+    memcpy(buf + len, data, take);
+    len += take;
+    return n;
   }
-  while (anyButton()) { delay(10); esp_task_wdt_reset(); }  // the stopping press must not also toggle mute
+  int available() override { return 0; }
+  int read() override { return -1; }
+  int peek() override { return -1; }
+  size_t size() const { return len & ~1U; }
+};
+
+size_t fetchTts(int orderId) {
+  if (!ttsBuf || orderId <= 0 || WiFi.status() != WL_CONNECTED) return 0;
+  HTTPClient http;
+  http.setConnectTimeout(8000);
+  http.setTimeout(10000);
+  String url = String(STATUS_URL) + "?tts=" + String(orderId);
+  if (!http.begin(url)) return 0;
+  int code = http.GET();
+  size_t got = 0;
+  if (code == 200) {
+    PcmSink sink(ttsBuf, ttsCap);
+    int wr = http.writeToStream(&sink);
+    got = sink.size();
+    Serial.printf("[TTS] id=%d http=%d write=%d bytes=%u\n", orderId, code, wr, (unsigned)got);
+  } else {
+    Serial.printf("[TTS] id=%d http=%d failed\n", orderId, code);
+  }
+  http.end();
+  esp_task_wdt_reset();
+  return got;
+}
+
+void alarm(char kind, int waitId, size_t ttsBytes) {
+  if (muted || !kind || !audioOk) return;
+  if (kind == 'd') {
+    playDoneOnce();
+    while (anyButton()) { delay(10); esp_task_wdt_reset(); }
+    delay(150);
+    return;
+  }
+
+  digitalWrite(PA_CTRL, HIGH);
+  bool stopped = silenceAbortable(30);
+
+  if (kind == 'w') {
+    for (int i = 0; i < cfgWaitRepeats && !stopped; i++) {
+      if (i > 0) stopped = silenceAbortable(1000);
+      if (!stopped) stopped = playPcmChunk(audio_wait, AUDIO_WAIT_LEN);
+    }
+    if (!stopped && ttsBytes > 0 && cfgTtsRepeats > 0) {
+      stopped = silenceAbortable(500);
+      int samples = (int)(ttsBytes / 2);
+      const int16_t *pcm = (const int16_t *)ttsBuf;
+      for (int i = 0; i < cfgTtsRepeats && !stopped; i++) {
+        if (i > 0) stopped = silenceAbortable(600);
+        if (!stopped) stopped = playPcmChunk(pcm, samples);
+      }
+    }
+  } else if (kind == 's') {
+    for (int i = 0; i < cfgStuckRepeats && !stopped; i++) {
+      if (i > 0) stopped = silenceAbortable(1000);
+      if (!stopped) stopped = playPcmChunk(audio_stuck, AUDIO_STUCK_LEN);
+    }
+  }
+
+  silence(stopped ? 50 : 30);
+  digitalWrite(PA_CTRL, LOW);
+  speakerOffMs = millis();
+  flushMic();
+  while (anyButton()) { delay(10); esp_task_wdt_reset(); }
   delay(150);
 }
 
-// ---- data ----
-const unsigned long REMIND_INTERVAL_MS = 10UL * 60UL * 1000UL;  // 10 minutes
-
+// =====================================================================
+// Ledger polling & parsing
+// =====================================================================
 struct Seen {
   int id;
   char code;
-  unsigned long enterTime;
-  bool reminded;
 };
 Seen seen[64];
 int nSeen = 0;
 bool firstFetch = true;
 
-char eventFrom(const String &list) {
+char eventFrom(const String &list, int &outWaitId) {
   Seen now[64];
   int n = 0;
   char ev = 0;
+  outWaitId = 0;
   int start = 0;
   while (start < (int)list.length() && n < 64) {
     int comma = list.indexOf(',', start);
@@ -497,41 +457,26 @@ char eventFrom(const String &list) {
       int id = item.substring(0, colon).toInt();
       char code = item[colon + 1];
       char before = 0;
-      unsigned long enterTime = 0;
-      bool reminded = false;
       bool found = false;
 
       for (int i = 0; i < nSeen; i++) {
         if (seen[i].id == id) {
           before = seen[i].code;
-          enterTime = seen[i].enterTime;
-          reminded = seen[i].reminded;
           found = true;
           break;
         }
       }
 
-      if (!found || before != code) {
-        enterTime = (code == 'w' || code == 's') ? millis() : 0;
-        reminded = false;
-        if (!firstFetch && before != code) {
-          int rank = code == 'w' ? 3 : code == 's' ? 2 : code == 'd' ? 1 : 0;
-          int cur = ev == 'w' ? 3 : ev == 's' ? 2 : ev == 'd' ? 1 : 0;
-          if (rank > cur) ev = code;
-        }
-      } else {
-        if ((code == 'w' || code == 's') && !reminded) {
-          if (millis() - enterTime >= REMIND_INTERVAL_MS) {
-            reminded = true;
-            Serial.printf("[STATUS] Order %d (%c) 10m reminder triggered\n", id, code);
-            int rank = code == 'w' ? 3 : code == 's' ? 2 : code == 'd' ? 1 : 0;
-            int cur = ev == 'w' ? 3 : ev == 's' ? 2 : ev == 'd' ? 1 : 0;
-            if (rank > cur) ev = code;
-          }
+      if (!firstFetch && (!found || before != code)) {
+        int rank = code == 'w' ? 3 : code == 's' ? 2 : code == 'd' ? 1 : 0;
+        int cur = ev == 'w' ? 3 : ev == 's' ? 2 : ev == 'd' ? 1 : 0;
+        if (rank > cur) {
+          ev = code;
+          if (code == 'w') outWaitId = id;
         }
       }
 
-      now[n++] = {id, code, enterTime, reminded};
+      now[n++] = {id, code};
     }
     start = comma + 1;
   }
@@ -548,13 +493,38 @@ String field(const String &line, int idx) {
   return e < 0 ? line.substring(s) : line.substring(s, e);
 }
 
-char poll() {
+void parseConfig(const String &s) {
+  int vals[5];
+  int idx = 0, pos = 0;
+  while (idx < 5 && pos <= (int)s.length()) {
+    int comma = s.indexOf(',', pos);
+    if (comma < 0) comma = s.length();
+    String part = s.substring(pos, comma);
+    if (!part.length()) return;
+    vals[idx++] = part.toInt();
+    pos = comma + 1;
+  }
+  if (idx != 5 || vals[3] < 1 || vals[4] < 1) return;
+  if (vals[0] != cfgWaitRepeats || vals[1] != cfgStuckRepeats ||
+      vals[2] != cfgTtsRepeats || vals[3] != cfgQuietMin || vals[4] != cfgMicThresh) {
+    cfgWaitRepeats = max(0, vals[0]);
+    cfgStuckRepeats = max(0, vals[1]);
+    cfgTtsRepeats = max(0, vals[2]);
+    cfgQuietMin = vals[3];
+    cfgMicThresh = vals[4];
+    Serial.printf("[CFG] wait=%d stuck=%d tts=%d quiet=%dm thresh=%d\n",
+                  cfgWaitRepeats, cfgStuckRepeats, cfgTtsRepeats, cfgQuietMin, cfgMicThresh);
+  }
+}
+
+char poll(int &outWaitId) {
+  outWaitId = 0;
   wl_status_t ws = WiFi.status();
   if (ws != WL_CONNECTED) {
     Serial.printf("[STATUS] Wi-Fi status: %d (not connected)\n", (int)ws);
     return 0;
   }
-  Serial.printf("[STATUS] Wi-Fi status: %d (connected, IP: %s)\n", (int)ws, WiFi.localIP().toString().c_str());
+  Serial.printf("[STATUS] Wi-Fi connected (IP: %s)\n", WiFi.localIP().toString().c_str());
   HTTPClient http;
   http.setConnectTimeout(8000);
   http.setTimeout(8000);
@@ -578,9 +548,13 @@ char poll() {
     String line = body.substring(pos, e);
     pos = e + 1;
     if (!line.length()) continue;
-    if (ln == 0) { countStr = field(line, 0); nWaiting = field(line, 1).toInt(); nExtra = field(line, 2).toInt(); }
-    else if (line.startsWith("E\t")) ev = eventFrom(line.substring(2));
-    else if (r < 4) {
+    if (ln == 0) {
+      countStr = field(line, 0);
+      nWaiting = field(line, 1).toInt();
+      parseConfig(field(line, 2));
+    } else if (line.startsWith("E\t")) {
+      ev = eventFrom(line.substring(2), outWaitId);
+    } else if (r < 4) {
       rows[r] = {field(line, 0), field(line, 1), field(line, 2), field(line, 3), field(line, 4).toInt(), field(line, 5) == "1"};
       r++;
     }
@@ -592,21 +566,117 @@ char poll() {
   return ev;
 }
 
+// =====================================================================
+// Microphone auto-mute & main loop
+// =====================================================================
 Preferences prefs;
 bool mainWasDown = false;
+bool autoQuiet = false;
+unsigned long lastLoudMs = 0;
+unsigned long lastMicLogMs = 0;
+
+// Accumulator over 12 chunks * 256 frames (~192ms at 16kHz)
+const int MIC_CHUNK_FRAMES = 256;
+const int MIC_WIN_CHUNKS = 12;
+const int MIC_WIN_SAMPLES = MIC_CHUNK_FRAMES * MIC_WIN_CHUNKS;
+int16_t micL[MIC_WIN_SAMPLES];
+int16_t micR[MIC_WIN_SAMPLES];
+int micChunkIdx = 0;
+
+void processMicChunk() {
+  if (!micOk) return;
+  int16_t buf[MIC_CHUNK_FRAMES * 2];
+  size_t br = i2s.readBytes((char *)buf, sizeof buf);
+  int frames = br / 4;
+  if (frames <= 0) return;
+  if (millis() - speakerOffMs <= 600) {
+    micChunkIdx = 0;
+    return;
+  }
+
+  int base = micChunkIdx * MIC_CHUNK_FRAMES;
+  for (int i = 0; i < frames && base + i < MIC_WIN_SAMPLES; i++) {
+    micL[base + i] = buf[i * 2];
+    micR[base + i] = buf[i * 2 + 1];
+  }
+  micChunkIdx++;
+  if (micChunkIdx < MIC_WIN_CHUNKS) return;
+  micChunkIdx = 0;
+
+  int n = MIC_WIN_SAMPLES;
+  int64_t sumL = 0, sumR = 0;
+  for (int i = 0; i < n; i++) { sumL += micL[i]; sumR += micR[i]; }
+  int32_t meanL = (int32_t)(sumL / n);
+  int32_t meanR = (int32_t)(sumR / n);
+
+  uint64_t sqL = 0, sqR = 0;
+  int peak = 0;
+  for (int i = 0; i < n; i++) {
+    int32_t dl = micL[i] - meanL;
+    int32_t dr = micR[i] - meanR;
+    sqL += (uint64_t)(dl * dl);
+    sqR += (uint64_t)(dr * dr);
+    int al = dl < 0 ? -dl : dl;
+    int ar = dr < 0 ? -dr : dr;
+    if (al > peak) peak = al;
+    if (ar > peak) peak = ar;
+  }
+  int rmsL = (int)sqrtf((float)sqL / n);
+  int rmsR = (int)sqrtf((float)sqR / n);
+  int level = max(rmsL, rmsR);
+
+  unsigned long nowMs = millis();
+  unsigned long quietMs = (unsigned long)cfgQuietMin * 60UL * 1000UL;
+
+  if (level >= cfgMicThresh) {
+    lastLoudMs = nowMs;
+    if (autoQuiet) {
+      autoQuiet = false;
+      if (muted) {
+        muted = false;
+        prefs.putBool("muted", false);
+        render();
+      }
+      Serial.printf("[MIC] Sound detected (rms=%d >= %d) -> auto unmute\n", level, cfgMicThresh);
+    }
+  } else if (!autoQuiet && (nowMs - lastLoudMs >= quietMs)) {
+    autoQuiet = true;
+    if (!muted) {
+      muted = true;
+      prefs.putBool("muted", true);
+      render();
+    }
+    Serial.printf("[MIC] Quiet for %d min -> auto mute\n", cfgQuietMin);
+  }
+
+  if (nowMs - lastMicLogMs >= 2000) {
+    lastMicLogMs = nowMs;
+    Serial.printf("[MIC] rms=%d (L=%d R=%d) peak=%d thresh=%d quiet=%lus/%lus autoQuiet=%d muted=%d\n",
+                  level, rmsL, rmsR, peak, cfgMicThresh,
+                  (nowMs - lastLoudMs) / 1000UL, quietMs / 1000UL,
+                  autoQuiet ? 1 : 0, muted ? 1 : 0);
+  }
+}
 
 void statusSetup() {
-  Serial.begin(115200);
   pinMode(BTN_MAIN, INPUT_PULLUP);
   pinMode(BTN_UP, INPUT_PULLUP);
   pinMode(BTN_DN, INPUT_PULLUP);
   prefs.begin("status", false);
   muted = prefs.getBool("muted", false);
   fb = (uint16_t *)heap_caps_malloc(W * H * 2, MALLOC_CAP_8BIT);
+  if (psramFound()) {
+    ttsCap = 512 * 1024;
+    ttsBuf = (uint8_t *)ps_malloc(ttsCap);
+  } else {
+    ttsCap = 96 * 1024;
+    ttsBuf = (uint8_t *)malloc(ttsCap);
+  }
   pinMode(LCD_BL, OUTPUT);
   digitalWrite(LCD_BL, HIGH);
   gfx->begin();
   initAudio();
+  lastLoudMs = millis();
   render();
 }
 
@@ -615,53 +685,49 @@ void statusLoop() {
   if (down && !mainWasDown) {
     muted = !muted;
     prefs.putBool("muted", muted);
+    if (!muted) {
+      autoQuiet = false;
+      lastLoudMs = millis();
+    }
     render();
-    if (!muted) playPattern('d');
+    if (!muted) playDoneOnce();
   }
   mainWasDown = down;
 
   if (!lastPoll || millis() - lastPoll >= (haveData ? POLL_MS : 5000UL)) {
     lastPoll = millis();
-    char ev = poll();
+    int waitId = 0;
+    char ev = poll(waitId);
+    size_t ttsBytes = 0;
+    if (ev == 'w' && waitId > 0 && !muted && cfgTtsRepeats > 0) {
+      ttsBytes = fetchTts(waitId);
+    }
     render();
-    alarm(ev);
+    alarm(ev, waitId, ttsBytes);
+    flushMic();
   } else if (!shownStale && haveData && millis() - lastOk > STALE_MS) {
     render();
   }
-  delay(20);
+
+  if (micOk) processMicChunk();
+  else delay(20);
 }
 
-// =====================================================================
-bool hidMode = false;
-
 void setup() {
-  keyboard.begin();
-  mouse.begin();
-  USB.productName("HID Bridge");
-  USB.begin();
-  esp_task_wdt_config_t wdt = {.timeout_ms = WATCHDOG_HID_MS, .idle_core_mask = 0, .trigger_panic = true};
+  Serial.begin(115200);
+  esp_task_wdt_config_t wdt = {.timeout_ms = WATCHDOG_STATUS_MS, .idle_core_mask = 0, .trigger_panic = true};
   esp_task_wdt_reconfigure(&wdt);
   esp_task_wdt_add(NULL);
 
-  for (int i = 0; i < 30 && !tud_mounted(); i++) delay(100);  // a USB host shows up within ~3 s
-  hidMode = tud_mounted() && !FORCE_STATUS;
-
-  WiFi.setHostname("hid-bridge");
+  WiFi.setHostname("paidan-status");
   WiFi.setSleep(false);
   WiFi.setAutoReconnect(true);
   WiFi.begin(WIFI_SSID, WIFI_PASS);
 
-  if (hidMode) {
-    pinMode(LCD_BL, OUTPUT);
-    digitalWrite(LCD_BL, LOW);
-  } else {
-    esp_task_wdt_config_t wdt_status = {.timeout_ms = WATCHDOG_STATUS_MS, .idle_core_mask = 0, .trigger_panic = true};
-    esp_task_wdt_reconfigure(&wdt_status);
-    statusSetup();
-  }
+  statusSetup();
 }
 
 void loop() {
   esp_task_wdt_reset();
-  if (hidMode) hidLoop(); else statusLoop();
+  statusLoop();
 }
