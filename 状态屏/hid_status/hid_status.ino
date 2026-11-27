@@ -58,10 +58,8 @@ const uint16_t C_MUTED = rgb(128, 132, 142);
 const uint16_t C_WHITE = rgb(236, 238, 242);
 const uint16_t C_FADED = rgb(78, 81, 88);
 const uint16_t C_HEAD = rgb(24, 26, 31);
-const uint16_t C_HEAD_STALE = rgb(70, 72, 78);
 const uint16_t C_HEAD_WAIT_FG = rgb(30, 16, 0);
 const uint16_t C_WAIT = rgb(255, 159, 28);
-const uint16_t C_STUCK = rgb(255, 90, 95);
 const uint16_t C_RUN = rgb(61, 220, 151);
 const uint16_t C_DONE = rgb(139, 143, 247);
 
@@ -176,71 +174,69 @@ bool shownStale = false;
 
 // Configurable parameters pushed by vpn-us (/screen line 0 col 2)
 int cfgWaitRepeats = 3;
-int cfgStuckRepeats = 2;
 int cfgTtsRepeats = 2;
 int cfgQuietMin = 20;
 int cfgMicThresh = 200;
 
 uint16_t stateColor(const String &s) {
   if (s == "等你") return C_WAIT;
-  if (s == "卡住") return C_STUCK;
   if (s == "完成") return C_DONE;
   return C_RUN;
 }
 
 void render() {
-  bool stale = haveData && millis() - lastOk > STALE_MS;
-  fill(0, 0, W - 1, H - 1, nWaiting && !stale ? C_BG_WAIT : C_BG);
-
-  uint16_t hbg = C_HEAD, hfg = C_MUTED;
-  String left;
-  int stuck = 0, running = 0;
-  for (int i = 0; i < nRows; i++) {
-    if (rows[i].state == "卡住") stuck++;
-    if (rows[i].state == "在跑") running++;
+  bool disconnected = !haveData || (millis() - lastOk > STALE_MS);
+  if (disconnected) {
+    fill(0, 0, W - 1, H - 1, C_BG);
+    if (muted) drawText(F_HEAD, 10, HEAD / 2, "静音", C_MUTED);
+    String msg = "没连上";
+    drawText(F_DISC, W / 2 - textWidth(F_DISC, msg) / 2, H / 2, msg, C_WHITE);
+    gfx->draw16bitRGBBitmap(0, 0, fb, W, H);
+    shownStale = true;
+    return;
   }
-  if (!haveData) left = "连接中";
-  else if (stale) { hbg = C_HEAD_STALE; hfg = C_WHITE; left = "过时"; }
-  else if (nWaiting) { hbg = C_WAIT; hfg = C_HEAD_WAIT_FG; left = "等你 " + String(nWaiting); }
-  else if (stuck) { hfg = C_STUCK; left = "卡住 " + String(stuck); }
-  else left = running ? "在跑 " + String(running) : "派单";
+
+  fill(0, 0, W - 1, H - 1, nWaiting ? C_BG_WAIT : C_BG);
+
+  uint16_t hbg = nWaiting ? C_WAIT : C_HEAD;
+  uint16_t hfg = nWaiting ? C_HEAD_WAIT_FG : C_MUTED;
   fill(0, 0, W - 1, HEAD - 1, hbg);
-  drawText(F_HEAD, 10, HEAD / 2, left, hfg);
+  if (muted) drawText(F_HEAD, 10, HEAD / 2, "静音", hfg);
   String right = countStr;
   int rx = W - 10 - textWidth(F_HEAD, right);
   drawText(F_HEAD, rx, HEAD / 2, right, hfg);
-  if (muted) drawText(F_HEAD, rx - 8 - textWidth(F_HEAD, "静音"), HEAD / 2, "静音", hfg);
 
-  if (!nRows && haveData) {
-    String e = "没有在跑的单";
+  if (!nRows) {
+    String e = "没有单";
     drawText(F_EMPTY, W / 2 - textWidth(F_EMPTY, e) / 2, HEAD + (H - HEAD) / 2, e, C_FADED);
-  }
-  for (int i = 0; i < nRows; i++) {
-    Row &r = rows[i];
-    int y = HEAD + i * ROW;
-    if (i) fill(12, y, W - 12, y, C_LINE);
-    uint16_t col = r.faded ? C_FADED : stateColor(r.state);
-    fill(8, y + 10, 12, y + ROW - 10, col);
-    fill(9, y + 9, 11, y + ROW - 9, col);
+  } else {
+    for (int i = 0; i < nRows; i++) {
+      Row &r = rows[i];
+      int y = HEAD + i * ROW;
+      if (i) fill(12, y, W - 12, y, C_LINE);
+      uint16_t col = r.faded ? C_FADED : stateColor(r.state);
+      fill(8, y + 10, 12, y + ROW - 10, col);
+      fill(9, y + 9, 11, y + ROW - 9, col);
 
-    int x = 22;
-    int px = drawText(F_SMALLB, x, y + 14, r.worker, r.faded ? C_FADED : C_WHITE, &F_SMALL);
-    drawText(F_SMALL, px + 6, y + 14, r.state, col);
-    String d = dur(r.age);
-    drawText(F_SMALL, W - 10 - textWidth(F_SMALL, d), y + 14, d, r.faded ? C_FADED : C_MUTED);
+      int x = 22;
+      int px = drawText(F_SMALLB, x, y + 14, r.worker, r.faded ? C_FADED : C_WHITE, &F_SMALL);
+      drawText(F_SMALL, px + 6, y + 14, r.state, col);
+      String d = dur(r.age);
+      drawText(F_SMALL, W - 10 - textWidth(F_SMALL, d), y + 14, d, r.faded ? C_FADED : C_MUTED);
 
-    String big = r.task, sub;
-    uint16_t bigCol = r.faded ? C_FADED : C_WHITE;
-    if (r.state == "等你" && r.why.length()) { big = r.why; bigCol = C_WAIT; sub = r.task; }
-    big = fit(F_BIG, big, W - x - 10);
-    int bx = drawText(F_BIG, x, y + 36, big, bigCol);
-    if (sub.length()) {
-      int room = W - 10 - (bx + 8);
-      if (room > 30) drawText(F_SMALL, bx + 8, y + 38, fit(F_SMALL, sub, room), C_MUTED);
+      String big = r.task, sub;
+      uint16_t bigCol = r.faded ? C_FADED : C_WHITE;
+      if (r.state == "等你" && r.why.length()) { big = r.why; bigCol = C_WAIT; sub = r.task; }
+      big = fit(F_BIG, big, W - x - 10);
+      int bx = drawText(F_BIG, x, y + 36, big, bigCol);
+      if (sub.length()) {
+        int room = W - 10 - (bx + 8);
+        if (room > 30) drawText(F_SMALL, bx + 8, y + 38, fit(F_SMALL, sub, room), C_MUTED);
+      }
     }
   }
   gfx->draw16bitRGBBitmap(0, 0, fb, W, H);
-  shownStale = stale;
+  shownStale = false;
 }
 
 // =====================================================================
@@ -416,11 +412,6 @@ void alarm(char kind, int waitId, size_t ttsBytes) {
         if (!stopped) stopped = playPcmChunk(pcm, samples);
       }
     }
-  } else if (kind == 's') {
-    for (int i = 0; i < cfgStuckRepeats && !stopped; i++) {
-      if (i > 0) stopped = silenceAbortable(1000);
-      if (!stopped) stopped = playPcmChunk(audio_stuck, AUDIO_STUCK_LEN);
-    }
   }
 
   silence(stopped ? 50 : 30);
@@ -468,8 +459,8 @@ char eventFrom(const String &list, int &outWaitId) {
       }
 
       if (!firstFetch && (!found || before != code)) {
-        int rank = code == 'w' ? 3 : code == 's' ? 2 : code == 'd' ? 1 : 0;
-        int cur = ev == 'w' ? 3 : ev == 's' ? 2 : ev == 'd' ? 1 : 0;
+        int rank = code == 'w' ? 2 : code == 'd' ? 1 : 0;
+        int cur = ev == 'w' ? 2 : ev == 'd' ? 1 : 0;
         if (rank > cur) {
           ev = code;
           if (code == 'w') outWaitId = id;
@@ -505,15 +496,14 @@ void parseConfig(const String &s) {
     pos = comma + 1;
   }
   if (idx != 5 || vals[3] < 1 || vals[4] < 1) return;
-  if (vals[0] != cfgWaitRepeats || vals[1] != cfgStuckRepeats ||
-      vals[2] != cfgTtsRepeats || vals[3] != cfgQuietMin || vals[4] != cfgMicThresh) {
+  if (vals[0] != cfgWaitRepeats || vals[2] != cfgTtsRepeats ||
+      vals[3] != cfgQuietMin || vals[4] != cfgMicThresh) {
     cfgWaitRepeats = max(0, vals[0]);
-    cfgStuckRepeats = max(0, vals[1]);
     cfgTtsRepeats = max(0, vals[2]);
     cfgQuietMin = vals[3];
     cfgMicThresh = vals[4];
-    Serial.printf("[CFG] wait=%d stuck=%d tts=%d quiet=%dm thresh=%d\n",
-                  cfgWaitRepeats, cfgStuckRepeats, cfgTtsRepeats, cfgQuietMin, cfgMicThresh);
+    Serial.printf("[CFG] wait=%d tts=%d quiet=%dm thresh=%d\n",
+                  cfgWaitRepeats, cfgTtsRepeats, cfgQuietMin, cfgMicThresh);
   }
 }
 
@@ -571,7 +561,6 @@ char poll(int &outWaitId) {
 // =====================================================================
 Preferences prefs;
 bool mainWasDown = false;
-bool autoQuiet = false;
 unsigned long lastLoudMs = 0;
 unsigned long lastMicLogMs = 0;
 
@@ -630,31 +619,19 @@ void processMicChunk() {
 
   if (level >= cfgMicThresh) {
     lastLoudMs = nowMs;
-    if (autoQuiet) {
-      autoQuiet = false;
-      if (muted) {
-        muted = false;
-        prefs.putBool("muted", false);
-        render();
-      }
-      Serial.printf("[MIC] Sound detected (rms=%d >= %d) -> auto unmute\n", level, cfgMicThresh);
-    }
-  } else if (!autoQuiet && (nowMs - lastLoudMs >= quietMs)) {
-    autoQuiet = true;
-    if (!muted) {
-      muted = true;
-      prefs.putBool("muted", true);
-      render();
-    }
+  } else if (!muted && (nowMs - lastLoudMs >= quietMs)) {
+    muted = true;
+    prefs.putBool("muted", true);
+    render();
     Serial.printf("[MIC] Quiet for %d min -> auto mute\n", cfgQuietMin);
   }
 
   if (nowMs - lastMicLogMs >= 2000) {
     lastMicLogMs = nowMs;
-    Serial.printf("[MIC] rms=%d (L=%d R=%d) peak=%d thresh=%d quiet=%lus/%lus autoQuiet=%d muted=%d\n",
+    Serial.printf("[MIC] rms=%d (L=%d R=%d) peak=%d thresh=%d quiet=%lus/%lus muted=%d\n",
                   level, rmsL, rmsR, peak, cfgMicThresh,
-                  (nowMs - lastLoudMs) / 1000UL, quietMs / 1000UL,
-                  autoQuiet ? 1 : 0, muted ? 1 : 0);
+                  muted ? 0UL : (nowMs - lastLoudMs) / 1000UL, quietMs / 1000UL,
+                  muted ? 1 : 0);
   }
 }
 
@@ -686,7 +663,6 @@ void statusLoop() {
     muted = !muted;
     prefs.putBool("muted", muted);
     if (!muted) {
-      autoQuiet = false;
       lastLoudMs = millis();
     }
     render();

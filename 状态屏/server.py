@@ -135,9 +135,9 @@ def view(db, now, hide=True):
             age = now - o["sent"]
             if now - o["updated"] > STUCK:
                 st = "卡住"
-                key = (1, -age)
+                key = (5, age)
             else:
-                key = (2, -age)
+                key = (2, age)
         rows.append((key, dict(id=o["id"], state=st, worker=o["worker"], task=o["task"],
                                why=o.get("why", "") if st == "等你" else "", age=int(age), faded=faded)))
     rows.sort(key=lambda r: r[0])
@@ -208,11 +208,12 @@ class H(BaseHTTPRequestHandler):
             cfg = load_cfg()
             cfg_str = f"{cfg['wait_beep']},{cfg['stuck_beep']},{cfg['tts_repeat']},{cfg['quiet_min']},{cfg['mic_thresh']}"
             out = [f"{today_done}/{today_total}\t{waiting}\t{cfg_str}"]
-            code = {"等你": "w", "卡住": "s", "在跑": "r", "完成": "d"}
+            code = {"等你": "w", "卡住": "r", "在跑": "r", "完成": "d"}
             out.append("E\t" + ",".join(f"{r['id']}:{code[r['state']]}" for r in rows))
-            display_rows = [r for r in rows if r["state"] != "卡住"][:4]
+            display_rows = rows[:4]
             for r in display_rows:
-                out.append("\t".join(str(x) for x in (r["state"], r["worker"], r["task"], r["why"], r["age"], r["faded"])))
+                st = "在跑" if r["state"] == "卡住" else r["state"]
+                out.append("\t".join(str(x) for x in (st, r["worker"], r["task"], r["why"], r["age"], r["faded"])))
             return self.reply(200, "\n".join(out) + "\n")
 
         if path == "/tts":
